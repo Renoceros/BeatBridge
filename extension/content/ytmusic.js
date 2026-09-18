@@ -109,11 +109,27 @@ async function queueTrackViaMenu(queryOrId, position = 'next') {
       searchInput.dispatchEvent(new Event('change', { bubbles: true }));
       searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
 
-      // Wait for search results
-      for (let i = 0; i < 15; i++) {
+      // Wait for search results and find the matching item
+      const searchTerms = queryOrId.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+      for (let i = 0; i < 20; i++) {
         await new Promise(r => setTimeout(r, 200));
-        const items = document.querySelectorAll('ytmusic-responsive-list-item-renderer');
-        if (items.length > 0) {
+        const items = Array.from(document.querySelectorAll('ytmusic-responsive-list-item-renderer'));
+        
+        const matched = items.find(item => {
+          const titleEl = item.querySelector('.title') || item.querySelector('.song-title');
+          const title = titleEl ? titleEl.textContent.trim().toLowerCase() : '';
+          const bylineEl = item.querySelector('.byline');
+          const byline = bylineEl ? bylineEl.textContent.trim().toLowerCase() : '';
+          const fullText = `${title} ${byline}`;
+          return searchTerms.length > 0
+            ? searchTerms.every(term => fullText.includes(term)) || searchTerms.some(term => title.includes(term))
+            : true;
+        });
+
+        if (matched) {
+          targetItem = matched;
+          break;
+        } else if (i >= 12 && items.length > 0) {
           targetItem = items[0];
           break;
         }
