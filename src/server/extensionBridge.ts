@@ -36,9 +36,20 @@ export class ExtensionBridge {
       console.log('[BeatBridge Extension] Connected from browser');
       this.activeSocket = ws;
 
+      const pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.ping();
+        }
+      }, 25000);
+
       ws.on('message', (raw: string) => {
         try {
           const msg: ExtensionMessage = JSON.parse(raw.toString());
+
+          if (msg.type === 'ping') {
+            ws.send(JSON.stringify({ type: 'pong' }));
+            return;
+          }
 
           if (msg.type === 'register') {
             this.activeProvider = msg.provider || 'ytmusic';
@@ -63,6 +74,7 @@ export class ExtensionBridge {
       });
 
       ws.on('close', () => {
+        clearInterval(pingInterval);
         console.log('[BeatBridge Extension] Browser disconnected');
         if (this.activeSocket === ws) {
           this.activeSocket = null;

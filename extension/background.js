@@ -1,7 +1,24 @@
 // BeatBridge Background Service Worker
 let socket = null;
 let reconnectTimer = null;
+let heartbeatInterval = null;
 const WS_URL = 'ws://127.0.0.1:4382/ws';
+
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatInterval = setInterval(() => {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'ping' }));
+    }
+  }, 20000);
+}
+
+function stopHeartbeat() {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+}
 
 function connectWebSocket() {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
@@ -13,6 +30,7 @@ function connectWebSocket() {
 
     socket.onopen = async () => {
       console.log('[BeatBridge Extension] Connected to local MCP daemon');
+      startHeartbeat();
       const provider = await detectActiveProvider();
       socket.send(JSON.stringify({
         type: 'register',
@@ -24,6 +42,7 @@ function connectWebSocket() {
     socket.onmessage = async (event) => {
       try {
         const msg = JSON.parse(event.data);
+        if (msg.type === 'pong') return;
         if (!msg.id || !msg.action) return;
 
         handleMcpCommand(msg);
@@ -33,14 +52,17 @@ function connectWebSocket() {
     };
 
     socket.onerror = (err) => {
+      stopHeartbeat();
       console.warn('[BeatBridge Extension] WebSocket error, will reconnect...');
     };
 
     socket.onclose = () => {
+      stopHeartbeat();
       console.log('[BeatBridge Extension] WebSocket closed. Reconnecting in 3s...');
       scheduleReconnect();
     };
   } catch (err) {
+    stopHeartbeat();
     scheduleReconnect();
   }
 }
@@ -132,6 +154,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
 
 // Keep connection alive & listen for lifecycle events
 connectWebSocket();
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab.url && (tab.url.includes('music.youtube.com') || tab.url.includes('spotify.com') || tab.url.includes('soundcloud.com'))) {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -139,3 +162,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     }
   }
 });
+
+// Periodic alarm keepalive (every 1 minute) to wake worker and re-verify connection
+chrome.alarms.create('beatbridge-keepalive', { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'beatbridge-keepalive') {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      connectWebSocket();
+    }
+  }
+});
+
