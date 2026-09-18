@@ -115,6 +115,22 @@ async function handleMcpCommand(msg) {
   }
 
   try {
+    if (msg.action === 'queue_insert_relative' || msg.action === 'queue_append') {
+      const file = (tab.url && tab.url.includes('music.youtube.com'))
+        ? 'content/ytmusic.js'
+        : (tab.url && tab.url.includes('spotify.com'))
+        ? 'content/spotify.js'
+        : 'content/soundcloud.js';
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: [file]
+        });
+      } catch (e) {
+        // Ignore if already active
+      }
+    }
+
     // Send command directly to content script in active tab
     const response = await chrome.tabs.sendMessage(tab.id, {
       action: msg.action,

@@ -75,36 +75,107 @@ function inspectQueue() {
   };
 }
 
-function insertRelative(videoIds = [], offset = 1) {
-  const queueEl = document.querySelector('ytmusic-player-queue');
-  if (queueEl && queueEl.dispatch) {
-    queueEl.dispatch({
-      type: 'ADD_ITEMS_TO_QUEUE',
-      payload: { videoIds, offset }
-    });
+async function queueTrackViaMenu(queryOrId, position = 'next') {
+  // 1. Check if track is already present in current page results
+  const existingItems = Array.from(document.querySelectorAll('ytmusic-responsive-list-item-renderer'));
+  let targetItem = null;
+
+  for (const item of existingItems) {
+    const titleEl = item.querySelector('.title') || item.querySelector('.song-title');
+    const title = titleEl ? titleEl.textContent.trim().toLowerCase() : '';
+    const link = item.querySelector('a')?.href || '';
+    if (link.includes(queryOrId) || (title && title.includes(queryOrId.toLowerCase()))) {
+      targetItem = item;
+      break;
+    }
   }
 
-  const items = document.querySelectorAll('ytmusic-player-queue-item');
+  // 2. If not found, perform search in YouTube Music without interrupting playback
+  if (!targetItem) {
+    const searchBox = document.querySelector('ytmusic-search-box');
+    const searchInput = document.querySelector('input.ytmusic-search-box') || 
+                        document.querySelector('#input.ytmusic-search-box') ||
+                        document.querySelector('input#input');
+
+    if (searchInput) {
+      if (searchBox) {
+        const searchBtn = searchBox.querySelector('button') || searchBox.querySelector('yt-icon-button');
+        if (searchBtn) searchBtn.click();
+      }
+      searchInput.click();
+      searchInput.focus();
+      searchInput.value = queryOrId;
+      searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+      searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+      searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+
+      // Wait for search results
+      for (let i = 0; i < 15; i++) {
+        await new Promise(r => setTimeout(r, 200));
+        const items = document.querySelectorAll('ytmusic-responsive-list-item-renderer');
+        if (items.length > 0) {
+          targetItem = items[0];
+          break;
+        }
+      }
+    }
+  }
+
+  if (targetItem) {
+    // 3. Click 3-dot menu button on the item
+    const menuBtn = targetItem.querySelector('ytmusic-menu-renderer yt-icon-button') ||
+                    targetItem.querySelector('ytmusic-menu-renderer button') ||
+                    targetItem.querySelector('#menu button');
+    if (menuBtn) {
+      menuBtn.click();
+      await new Promise(r => setTimeout(r, 400));
+
+      // 4. Click "Play next" or "Add to queue" in popup menu
+      const targetText = position === 'next' ? 'Play next' : 'Add to queue';
+      const menuItems = Array.from(document.querySelectorAll('ytmusic-menu-service-item-renderer'));
+      const actionItem = menuItems.find(el => el.textContent && el.textContent.includes(targetText));
+
+      if (actionItem) {
+        actionItem.click();
+        await new Promise(r => setTimeout(r, 300));
+
+        // 5. Open UP NEXT tab so user immediately sees it
+        const upNextTab = Array.from(document.querySelectorAll('ytmusic-tab-renderer')).find(t =>
+          t.textContent && (t.textContent.includes('Up next') || t.textContent.includes('UP NEXT'))
+        );
+        if (upNextTab) upNextTab.click();
+
+        return { success: true, queued: queryOrId, position };
+      }
+    }
+  }
+
+  return { success: false, error: `Could not find or queue track: ${queryOrId}` };
+}
+
+async function insertRelative(videoIds = [], offset = 1) {
+  const results = [];
+  for (const id of videoIds) {
+    const res = await queueTrackViaMenu(id, 'next');
+    results.push(res);
+  }
+  const allSuccess = results.every(r => r.success);
   return {
-    success: true,
-    insertedIndices: videoIds.map((_, i) => offset + i),
-    newQueueLength: items.length + videoIds.length
+    success: allSuccess,
+    details: results
   };
 }
 
-function appendQueue(videoIds = []) {
-  const queueEl = document.querySelector('ytmusic-player-queue');
-  if (queueEl && queueEl.dispatch) {
-    queueEl.dispatch({
-      type: 'ADD_ITEMS_TO_QUEUE',
-      payload: { videoIds }
-    });
+async function appendQueue(videoIds = []) {
+  const results = [];
+  for (const id of videoIds) {
+    const res = await queueTrackViaMenu(id, 'tail');
+    results.push(res);
   }
-
-  const items = document.querySelectorAll('ytmusic-player-queue-item');
+  const allSuccess = results.every(r => r.success);
   return {
-    success: true,
-    newQueueLength: items.length + videoIds.length
+    success: allSuccess,
+    details: results
   };
 }
 
@@ -280,9 +351,9 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       case 'queue_inspect':
         return inspectQueue();
       case 'queue_insert_relative':
-        return insertRelative(params.videoIds, params.offset);
+        return await insertRelative(params.videoIds, params.offset);
       case 'queue_append':
-        return appendQueue(params.videoIds);
+        return await appendQueue(params.videoIds);
       case 'queue_jump_to':
         return jumpTo(params.index);
       case 'queue_remove':
