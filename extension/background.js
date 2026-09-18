@@ -113,6 +113,23 @@ async function handleMcpCommand(msg) {
   }
 }
 
+// Handle status request from popup
+chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
+  if (req.type === 'getStatus') {
+    const isConnected = socket !== null && socket.readyState === WebSocket.OPEN;
+    sendResponse({
+      connected: isConnected,
+      wsState: socket ? socket.readyState : -1
+    });
+    return true;
+  }
+  if (req.type === 'reconnect') {
+    connectWebSocket();
+    sendResponse({ ok: true });
+    return true;
+  }
+});
+
 // Keep connection alive & listen for lifecycle events
 connectWebSocket();
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {

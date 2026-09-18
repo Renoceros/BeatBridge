@@ -3,20 +3,41 @@ document.addEventListener('DOMContentLoaded', async () => {
   const statusText = document.getElementById('statusText');
   const activeTabEl = document.getElementById('activeTab');
 
-  // Check if daemon is reachable via health endpoint
-  try {
-    const res = await fetch('http://127.0.0.1:4382/health');
-    if (res.ok) {
-      const data = await res.json();
+  function updateStatus(connected) {
+    if (connected) {
       statusDot.classList.add('connected');
-      statusText.textContent = data.extensionConnected ? 'Connected' : 'Daemon Ready';
+      statusText.textContent = 'Connected';
     } else {
       statusDot.classList.remove('connected');
       statusText.textContent = 'Daemon Offline';
     }
-  } catch (err) {
-    statusDot.classList.remove('connected');
-    statusText.textContent = 'Daemon Offline';
+  }
+
+  // Ask background service worker for WebSocket state
+  chrome.runtime.sendMessage({ type: 'getStatus' }, (res) => {
+    if (chrome.runtime.lastError || !res) {
+      // Background worker might be waking up, try direct health check
+      checkHealthEndpoint();
+    } else {
+      updateStatus(res.connected);
+      if (!res.connected) {
+        chrome.runtime.sendMessage({ type: 'reconnect' });
+      }
+    }
+  });
+
+  async function checkHealthEndpoint() {
+    try {
+      const res = await fetch('http://127.0.0.1:4382/health');
+      if (res.ok) {
+        const data = await res.json();
+        updateStatus(true);
+      } else {
+        updateStatus(false);
+      }
+    } catch (err) {
+      updateStatus(false);
+    }
   }
 
   // Detect active music tabs
