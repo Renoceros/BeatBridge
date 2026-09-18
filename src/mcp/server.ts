@@ -152,22 +152,39 @@ export function createBeatBridgeMcpServer(provider: PlaybackProvider): McpServer
   return server;
 }
 
+import { randomUUID } from 'crypto';
+
 export function startMcpHttpServer(
   port: number,
   provider: PlaybackProvider,
   extensionBridge?: ExtensionBridge
 ): http.Server {
-  const mcpServer = createBeatBridgeMcpServer(provider);
-  const streamableTransport = new StreamableHTTPServerTransport();
+  const sessions = new Map<string, StreamableHTTPServerTransport>();
 
-  mcpServer.connect(streamableTransport).catch((err) => {
-    console.error('[BeatBridge MCP] Transport error:', err);
-  });
+  function createSession(): StreamableHTTPServerTransport {
+    const mcpServer = createBeatBridgeMcpServer(provider);
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      enableJsonResponse: true,
+      onsessioninitialized: (initializedSid) => {
+        sessions.set(initializedSid, transport);
+      },
+      onsessionclosed: (closedSid) => {
+        sessions.delete(closedSid);
+      }
+    });
+
+    mcpServer.connect(transport).catch((err) => {
+      console.error('[BeatBridge MCP] Transport error:', err);
+    });
+
+    return transport;
+  }
 
   const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, DELETE');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, Mcp-Session-Id, Mcp-Protocol-Version');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(200).end();
@@ -193,7 +210,74 @@ export function startMcpHttpServer(
       parsedUrl.pathname === '/' ||
       parsedUrl.pathname.startsWith('/message')
     ) {
-      await streamableTransport.handleRequest(req, res);
+      // Normalize Accept header for streamable HTTP transport compatibility
+      if (!req.headers.accept || req.headers.accept === '*/*') {
+        req.headers.accept = 'application/json, text/event-stream';
+      } else if (!req.headers.accept.includes('text/event-stream')) {
+        req.headers.accept = `${req.headers.accept}, text/event-stream`;
+      }
+
+      if (req.method === 'GET') {
+        const sidHeader = req.headers['mcp-session-id'] as string | undefined;
+        let transport = sidHeader ? sessions.get(sidHeader) : undefined;
+        if (!transport) {
+          transport = createSession();
+        }
+        try {
+          await transport.handleRequest(req, res);
+        } catch (err: any) {
+          console.error('[BeatBridge MCP] GET handleRequest error:', err);
+          if (!res.headersSent) {
+            res.writeHead(500).end();
+          }
+        }
+        return;
+      }
+
+      // Read request body for POST
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk;
+      });
+
+      req.on('end', async () => {
+        try {
+          let parsed: any = null;
+          if (body) {
+            try {
+              parsed = JSON.parse(body);
+            } catch {
+              // Ignore non-JSON
+            }
+          }
+
+          const isInit =
+            parsed &&
+            (parsed.method === 'initialize' ||
+              (Array.isArray(parsed) && parsed.some((p: any) => p.method === 'initialize')));
+
+          const sidHeader = req.headers['mcp-session-id'] as string | undefined;
+          let transport = sidHeader ? sessions.get(sidHeader) : undefined;
+
+          if (isInit || !transport) {
+            transport = createSession();
+          }
+
+          await transport.handleRequest(req, res, parsed);
+        } catch (err: any) {
+          console.error('[BeatBridge MCP] handleRequest error:', err);
+          if (!res.headersSent) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                error: { code: -32603, message: err?.message || 'Internal Server Error' },
+                id: null
+              })
+            );
+          }
+        }
+      });
       return;
     }
 
