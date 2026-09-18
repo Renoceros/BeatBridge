@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "test": "tsc && node dist/test/self_check.js",
     "start": "tsc && electron .",
     "dev": "electron ."
   },
