@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 280px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+      padding: 16px;
+      background: #121212;
+      color: #ffffff;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #282828;
+    }
+    .title {
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: 0.5px;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #e22134;
+    }
+    .dot.connected {
+      background: #1ed760;
+    }
+    .card {
+      background: #1e1e1e;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .label {
+      font-size: 11px;
+      color: #aaaaaa;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .val {
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .supported-platforms {
+      font-size: 11px;
+      color: #888888;
+      text-align: center;
+      margin-top: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="title">BEATBRIDGE DJ</div>
+    <div class="status-badge">
+      <div id="statusDot" class="dot"></div>
+      <span id="statusText">Connecting...</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="label">Connected Daemon</div>
+    <div id="daemonUrl" class="val">ws://127.0.0.1:4382/ws</div>
+  </div>
+
+  <div class="card">
+    <div class="label">Active Player Tab</div>
+    <div id="activeTab" class="val">Detecting...</div>
+  </div>
+
+  <div class="supported-platforms">
+    Supports YouTube Music, Spotify & SoundCloud
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

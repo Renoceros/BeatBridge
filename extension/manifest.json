@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "BeatBridge - AI DJ Controller",
+  "version": "1.0.0",
+  "description": "Connects YouTube Music, Spotify, and SoundCloud to local AI agents via Model Context Protocol (MCP).",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://music.youtube.com/*",
+    "https://open.spotify.com/*",
+    "https://soundcloud.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "BeatBridge Status"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://music.youtube.com/*"],
+      "js": ["content/ytmusic.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://open.spotify.com/*"],
+      "js": ["content/spotify.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://soundcloud.com/*"],
+      "js": ["content/soundcloud.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
