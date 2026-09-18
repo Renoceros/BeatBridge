@@ -8,18 +8,26 @@
   },
   "scripts": {
     "build": "tsc",
-    "start": "tsc && electron .",
-    "dev": "electron ."
+    "start": "tsc && node dist/main/daemon.js",
+    "daemon": "node dist/main/daemon.js",
+    "test": "tsc && node dist/test/self_check.js"
   },
-  "keywords": ["mcp", "youtube-music", "electron", "dj"],
+  "keywords": [
+    "mcp",
+    "youtube-music",
+    "electron",
+    "dj"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.1",
+    "ws": "^8.21.3",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@types/node": "^22.13.9",
+    "@types/ws": "^8.18.1",
     "electron": "^35.1.2",
     "typescript": "^5.8.2"
   }

@@ -3,24 +3,32 @@ import { URL } from 'url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
-import { PlayerBridgeController } from '../bridge/controller.js';
-import { InnerTubeClient } from '../innertube/client.js';
+import { ExtensionBridge } from '../server/extensionBridge.js';
 
-export function createBeatBridgeMcpServer(
-  bridge: PlayerBridgeController,
-  innertube: InnerTubeClient
-): McpServer {
+export interface PlaybackProvider {
+  getPlayerState(): Promise<any>;
+  inspectQueue(): Promise<any>;
+  search(query: string, limit?: number): Promise<any>;
+  getRadioSeeds(videoId: string, limit?: number): Promise<any>;
+  insertRelative(videoIds: string[], offset?: number): Promise<any>;
+  appendQueue(videoIds: string[]): Promise<any>;
+  jumpTo(index: number): Promise<any>;
+  removeTrack(index: number): Promise<any>;
+  playerControl(action: string, seekSeconds?: number): Promise<any>;
+}
+
+export function createBeatBridgeMcpServer(provider: PlaybackProvider): McpServer {
   const server = new McpServer({
     name: 'ytmusic-dj',
-    version: '0.1.0'
+    version: '0.2.0'
   });
 
   server.tool(
     'player_get_state',
-    'Get real-time status of active playback, progress, volume, and track details.',
+    'Get real-time status of active playback, progress, volume, and track details from active browser player.',
     {},
     async () => {
-      const state = await bridge.getPlayerState();
+      const state = await provider.getPlayerState();
       return {
         content: [{ type: 'text', text: JSON.stringify(state, null, 2) }]
       };
@@ -29,10 +37,10 @@ export function createBeatBridgeMcpServer(
 
   server.tool(
     'queue_inspect',
-    'Inspect the current active playing queue, including history and upcoming tracks.',
+    'Inspect current active playing queue, including history and upcoming tracks.',
     {},
     async () => {
-      const queue = await bridge.inspectQueue();
+      const queue = await provider.inspectQueue();
       return {
         content: [{ type: 'text', text: JSON.stringify(queue, null, 2) }]
       };
@@ -41,13 +49,13 @@ export function createBeatBridgeMcpServer(
 
   server.tool(
     'music_search',
-    'Search for songs, albums, or artists on YouTube Music.',
+    'Search for songs, albums, or artists on active streaming platform.',
     {
       query: z.string().describe('Search keywords, title, or semantic description'),
       limit: z.number().default(5)
     },
     async ({ query, limit }) => {
-      const results = await innertube.search(query, limit);
+      const results = await provider.search(query, limit);
       return {
         content: [{ type: 'text', text: JSON.stringify(results, null, 2) }]
       };
@@ -56,13 +64,13 @@ export function createBeatBridgeMcpServer(
 
   server.tool(
     'music_get_radio_seeds',
-    'Retrieve algorithmic watch-next radio seeds derived from YouTube audio graph for a given track.',
+    'Retrieve algorithmic watch-next radio seeds derived from audio graph for a given track.',
     {
-      videoId: z.string().describe('The anchor track videoId'),
+      videoId: z.string().describe('The anchor track videoId / URI'),
       limit: z.number().default(10)
     },
     async ({ videoId, limit }) => {
-      const seeds = await innertube.getRadioSeeds(videoId, limit);
+      const seeds = await provider.getRadioSeeds(videoId, limit);
       return {
         content: [{ type: 'text', text: JSON.stringify(seeds, null, 2) }]
       };
@@ -73,11 +81,11 @@ export function createBeatBridgeMcpServer(
     'queue_insert_relative',
     'Insert one or more tracks relative to active song index (e.g., offset=1 means Up Next).',
     {
-      videoIds: z.array(z.string()).describe('List of video IDs to insert in sequence'),
+      videoIds: z.array(z.string()).describe('List of video/track IDs to insert in sequence'),
       offset: z.number().int().min(1).default(1).describe('1 = play immediately after current song, 2 = after 1 song, etc.')
     },
     async ({ videoIds, offset }) => {
-      const result = await bridge.insertRelative(videoIds, offset);
+      const result = await provider.insertRelative(videoIds, offset);
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
       };
@@ -86,12 +94,12 @@ export function createBeatBridgeMcpServer(
 
   server.tool(
     'queue_append',
-    'Append a list of track IDs to the end of the current active queue.',
+    'Append a list of track IDs to end of current active queue.',
     {
-      videoIds: z.array(z.string()).describe('List of video IDs to append')
+      videoIds: z.array(z.string()).describe('List of video/track IDs to append')
     },
     async ({ videoIds }) => {
-      const result = await bridge.appendQueue(videoIds);
+      const result = await provider.appendQueue(videoIds);
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
       };
@@ -100,12 +108,12 @@ export function createBeatBridgeMcpServer(
 
   server.tool(
     'queue_jump_to',
-    'Jump playback directly to an existing item in the queue by its index.',
+    'Jump playback directly to an existing item in queue by its index.',
     {
       index: z.number().int().min(0).describe('Target item index in queue')
     },
     async ({ index }) => {
-      const result = await bridge.jumpTo(index);
+      const result = await provider.jumpTo(index);
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
       };
@@ -114,12 +122,12 @@ export function createBeatBridgeMcpServer(
 
   server.tool(
     'queue_remove',
-    'Remove a track from the upcoming queue by index.',
+    'Remove a track from upcoming queue by index.',
     {
       index: z.number().int().min(0).describe('Queue index to remove')
     },
     async ({ index }) => {
-      const result = await bridge.removeTrack(index);
+      const result = await provider.removeTrack(index);
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
       };
@@ -134,7 +142,7 @@ export function createBeatBridgeMcpServer(
       seekSeconds: z.number().optional().describe('Target seconds if action is seek')
     },
     async ({ action, seekSeconds }) => {
-      const result = await bridge.playerControl(action, seekSeconds);
+      const result = await provider.playerControl(action, seekSeconds);
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
       };
@@ -146,13 +154,12 @@ export function createBeatBridgeMcpServer(
 
 export function startMcpHttpServer(
   port: number,
-  bridge: PlayerBridgeController,
-  innertube: InnerTubeClient
+  provider: PlaybackProvider,
+  extensionBridge?: ExtensionBridge
 ): http.Server {
   const transports = new Map<string, SSEServerTransport>();
 
   const server = http.createServer(async (req, res) => {
-    // Enable CORS for local dev / dashboard / Antigravity
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -166,8 +173,8 @@ export function startMcpHttpServer(
 
     if (req.method === 'GET' && parsedUrl.pathname === '/sse') {
       const transport = new SSEServerTransport('/message', res);
-      const mcpServer = createBeatBridgeMcpServer(bridge, innertube);
-      
+      const mcpServer = createBeatBridgeMcpServer(provider);
+
       transports.set(transport.sessionId, transport);
       transport.onclose = () => {
         transports.delete(transport.sessionId);
@@ -191,15 +198,25 @@ export function startMcpHttpServer(
 
     if (req.method === 'GET' && parsedUrl.pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', activeSessions: transports.size }));
+      res.end(JSON.stringify({
+        status: 'ok',
+        activeSessions: transports.size,
+        extensionConnected: extensionBridge ? extensionBridge.isConnected() : false,
+        activeProvider: extensionBridge ? extensionBridge.getActiveProvider() : 'direct'
+      }));
       return;
     }
 
     res.writeHead(404).end('Not Found');
   });
 
+  if (extensionBridge) {
+    extensionBridge.attach(server);
+  }
+
   server.listen(port, '127.0.0.1', () => {
-    console.log(`[BeatBridge MCP Host] Listening on http://127.0.0.1:${port}/sse`);
+    console.log(`[BeatBridge Host] MCP Server listening on http://127.0.0.1:${port}/sse`);
+    console.log(`[BeatBridge Host] Extension WebSocket listening on ws://127.0.0.1:${port}/ws`);
   });
 
   return server;
