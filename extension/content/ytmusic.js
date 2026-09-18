@@ -75,7 +75,25 @@ function inspectQueue() {
   };
 }
 
+let isQueueingLock = false;
+
 async function queueTrackViaMenu(queryOrId, position = 'next') {
+  if (isQueueingLock) {
+    for (let w = 0; w < 30 && isQueueingLock; w++) {
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
+  isQueueingLock = true;
+  try {
+    return await doQueueTrack(queryOrId, position);
+  } finally {
+    isQueueingLock = false;
+  }
+}
+
+async function doQueueTrack(queryOrId, position = 'next') {
+  const searchTerms = queryOrId.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+
   // 1. Check if track is already present in current page results
   const existingItems = Array.from(document.querySelectorAll('ytmusic-responsive-list-item-renderer'));
   let targetItem = null;
@@ -83,8 +101,10 @@ async function queueTrackViaMenu(queryOrId, position = 'next') {
   for (const item of existingItems) {
     const titleEl = item.querySelector('.title') || item.querySelector('.song-title');
     const title = titleEl ? titleEl.textContent.trim().toLowerCase() : '';
-    const link = item.querySelector('a')?.href || '';
-    if (link.includes(queryOrId) || (title && title.includes(queryOrId.toLowerCase()))) {
+    const bylineEl = item.querySelector('.byline');
+    const byline = bylineEl ? bylineEl.textContent.trim().toLowerCase() : '';
+    const fullText = `${title} ${byline}`;
+    if (searchTerms.every(term => fullText.includes(term))) {
       targetItem = item;
       break;
     }
@@ -109,9 +129,8 @@ async function queueTrackViaMenu(queryOrId, position = 'next') {
       searchInput.dispatchEvent(new Event('change', { bubbles: true }));
       searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
 
-      // Wait for search results and find the matching item
-      const searchTerms = queryOrId.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-      for (let i = 0; i < 20; i++) {
+      // Wait for search results and strictly match target keywords
+      for (let i = 0; i < 25; i++) {
         await new Promise(r => setTimeout(r, 200));
         const items = Array.from(document.querySelectorAll('ytmusic-responsive-list-item-renderer'));
         
@@ -121,16 +140,11 @@ async function queueTrackViaMenu(queryOrId, position = 'next') {
           const bylineEl = item.querySelector('.byline');
           const byline = bylineEl ? bylineEl.textContent.trim().toLowerCase() : '';
           const fullText = `${title} ${byline}`;
-          return searchTerms.length > 0
-            ? searchTerms.every(term => fullText.includes(term)) || searchTerms.some(term => title.includes(term))
-            : true;
+          return searchTerms.every(term => fullText.includes(term));
         });
 
         if (matched) {
           targetItem = matched;
-          break;
-        } else if (i >= 12 && items.length > 0) {
-          targetItem = items[0];
           break;
         }
       }
@@ -138,7 +152,7 @@ async function queueTrackViaMenu(queryOrId, position = 'next') {
   }
 
   if (targetItem) {
-    // 3. Click 3-dot menu button on the item
+    // 3. Click 3-dot menu button on the matched item
     const menuBtn = targetItem.querySelector('ytmusic-menu-renderer yt-icon-button') ||
                     targetItem.querySelector('ytmusic-menu-renderer button') ||
                     targetItem.querySelector('#menu button');
@@ -153,7 +167,7 @@ async function queueTrackViaMenu(queryOrId, position = 'next') {
 
       if (actionItem) {
         actionItem.click();
-        await new Promise(r => setTimeout(r, 300));
+        await new Promise(r => setTimeout(r, 400));
 
         // 5. Open UP NEXT tab so user immediately sees it
         const upNextTab = Array.from(document.querySelectorAll('ytmusic-tab-renderer')).find(t =>
@@ -166,7 +180,7 @@ async function queueTrackViaMenu(queryOrId, position = 'next') {
     }
   }
 
-  return { success: false, error: `Could not find or queue track: ${queryOrId}` };
+  return { success: false, error: `Could not find matching track for query: ${queryOrId}` };
 }
 
 async function insertRelative(videoIds = [], offset = 1) {
@@ -357,35 +371,38 @@ async function getRadioSeeds(videoId, limit = 10) {
   }
 }
 
-// Listen for commands from background worker
-chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
-  (async () => {
-    const { action, params } = req;
-    switch (action) {
-      case 'player_get_state':
-        return getPlayerState();
-      case 'queue_inspect':
-        return inspectQueue();
-      case 'queue_insert_relative':
-        return await insertRelative(params.videoIds, params.offset);
-      case 'queue_append':
-        return await appendQueue(params.videoIds);
-      case 'queue_jump_to':
-        return jumpTo(params.index);
-      case 'queue_remove':
-        return removeTrack(params.index);
-      case 'player_control':
-        return playerControl(params.action, params.seekSeconds);
-      case 'music_search':
-        return await searchMusic(params.query, params.limit);
-      case 'music_get_radio_seeds':
-        return await getRadioSeeds(params.videoId, params.limit);
-      default:
-        throw new Error(`Unknown action: ${action}`);
-    }
-  })()
-    .then(result => sendResponse({ result, error: null }))
-    .catch(err => sendResponse({ result: null, error: err.message }));
+// Listen for commands from background worker (singleton guard)
+if (!window.__BEATBRIDGE_YTMUSIC_LISTENER_REGISTERED__) {
+  window.__BEATBRIDGE_YTMUSIC_LISTENER_REGISTERED__ = true;
+  chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
+    (async () => {
+      const { action, params } = req;
+      switch (action) {
+        case 'player_get_state':
+          return getPlayerState();
+        case 'queue_inspect':
+          return inspectQueue();
+        case 'queue_insert_relative':
+          return await insertRelative(params.videoIds, params.offset);
+        case 'queue_append':
+          return await appendQueue(params.videoIds);
+        case 'queue_jump_to':
+          return jumpTo(params.index);
+        case 'queue_remove':
+          return removeTrack(params.index);
+        case 'player_control':
+          return playerControl(params.action, params.seekSeconds);
+        case 'music_search':
+          return await searchMusic(params.query, params.limit);
+        case 'music_get_radio_seeds':
+          return await getRadioSeeds(params.videoId, params.limit);
+        default:
+          throw new Error(`Unknown action: ${action}`);
+      }
+    })()
+      .then(result => sendResponse({ result, error: null }))
+      .catch(err => sendResponse({ result: null, error: err.message }));
 
-  return true; // Keep sendResponse channel open for async
-});
+    return true; // Keep sendResponse channel open for async
+  });
+}
