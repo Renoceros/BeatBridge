@@ -251,16 +251,24 @@ function jumpTo(index) {
   return { success: false, nowPlaying: '' };
 }
 
-function removeTrack(index) {
-  const queueEl = document.querySelector('ytmusic-player-queue');
-  if (queueEl && queueEl.dispatch) {
-    queueEl.dispatch({
-      type: 'REMOVE_ITEM_FROM_QUEUE',
-      payload: { index }
-    });
-    return { success: true };
+async function removeTrack(index) {
+  const items = Array.from(document.querySelectorAll('ytmusic-player-queue-item'));
+  if (items[index]) {
+    const menuBtn = items[index].querySelector('ytmusic-menu-renderer yt-icon-button') ||
+                    items[index].querySelector('ytmusic-menu-renderer button') ||
+                    items[index].querySelector('#menu button');
+    if (menuBtn) {
+      menuBtn.click();
+      await new Promise(r => setTimeout(r, 300));
+      const menuItems = Array.from(document.querySelectorAll('ytmusic-menu-service-item-renderer'));
+      const removeItem = menuItems.find(el => el.textContent && el.textContent.includes('Remove from queue'));
+      if (removeItem) {
+        removeItem.click();
+        return { success: true, removedIndex: index };
+      }
+    }
   }
-  return { success: false };
+  return { success: false, error: `Could not find or remove track at index ${index}` };
 }
 
 function playerControl(action, seekSeconds) {
@@ -417,7 +425,7 @@ if (!window.__BEATBRIDGE_YTMUSIC_LISTENER_REGISTERED__) {
         case 'queue_jump_to':
           return jumpTo(params.index);
         case 'queue_remove':
-          return removeTrack(params.index);
+          return await removeTrack(params.index);
         case 'player_control':
           return playerControl(params.action, params.seekSeconds);
         case 'music_search':
