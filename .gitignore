@@ -43,3 +43,6 @@ logs/
 *.log
 tmp/
 scratch/
+
+# Others
+temp/
