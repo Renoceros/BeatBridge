@@ -127,10 +127,39 @@ async function handleMcpCommand(msg) {
       error: response?.error || null
     }));
   } catch (err) {
+    if (err.message && err.message.includes('Receiving end does not exist')) {
+      try {
+        const file = (tab.url && tab.url.includes('music.youtube.com'))
+          ? 'content/ytmusic.js'
+          : (tab.url && tab.url.includes('spotify.com'))
+          ? 'content/spotify.js'
+          : 'content/soundcloud.js';
+
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: [file]
+        });
+
+        const retryResponse = await chrome.tabs.sendMessage(tab.id, {
+          action: msg.action,
+          params: msg.params || {}
+        });
+
+        socket.send(JSON.stringify({
+          id: msg.id,
+          result: retryResponse?.result !== undefined ? retryResponse.result : retryResponse,
+          error: retryResponse?.error || null
+        }));
+        return;
+      } catch (injectErr) {
+        // Fallback to reporting original error
+      }
+    }
+
     socket.send(JSON.stringify({
       id: msg.id,
       result: null,
-      error: `Failed to communicate with music tab (${tab.title}): ${err.message}`
+      error: `Failed to communicate with music tab (${tab.title || tab.url}): ${err.message}`
     }));
   }
 }
