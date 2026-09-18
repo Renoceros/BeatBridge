@@ -1,0 +1,159 @@
+{
+  "project": "BeatBridge (ytmusic-mcp-dj)",
+  "version": "0.1.0",
+  "updatedAt": "2026-09-18T13:42:00Z",
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Project Scaffolding & Build Tooling",
+      "tasks": [
+        {
+          "id": "TASK-101",
+          "title": "Initialize TypeScript & Electron project configuration",
+          "description": "Configure package.json, tsconfig.json, build scripts, and dependencies (Electron, @modelcontextprotocol/sdk, zod).",
+          "status": "completed",
+          "assignedTo": "agent",
+          "acceptanceCriteria": [
+            "npm run build compiles TypeScript without errors",
+            "Electron boots into empty window test harness"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "Electron Host & Persistent Session Harness",
+      "tasks": [
+        {
+          "id": "TASK-201",
+          "title": "Implement Electron Chromium host window with persistent partition",
+          "description": "Render music.youtube.com using partition 'persist:ytmusic' allowing user to authenticate via GUI without Cloud API keys.",
+          "status": "pending",
+          "assignedTo": "agent",
+          "acceptanceCriteria": [
+            "Loads music.youtube.com reliably",
+            "Stores auth cookies across app restarts",
+            "App window stays responsive without blocking main thread"
+          ],
+          "references": ["PRD:FR-1.1", "PRD:FR-1.2"]
+        },
+        {
+          "id": "TASK-202",
+          "title": "Implement Cookie Extraction and SAPISID Hash Generator",
+          "description": "Extract active session cookies (__Secure-3PAPISID, SAPISID) and generate authorization header for YouTube internal APIs.",
+          "status": "pending",
+          "assignedTo": "agent",
+          "acceptanceCriteria": [
+            "Extracts cookies from session partition",
+            "Generates SHA-1 SAPISID hash header for authorized background requests"
+          ],
+          "references": ["PRD:FR-1.3", "TDD:Module 2"]
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "name": "PlayerBridge DOM Controller",
+      "tasks": [
+        {
+          "id": "TASK-301",
+          "title": "Implement Playback State Introspection",
+          "description": "Query player bar elements to extract isPlaying, track title, artist, album, duration, and elapsed seconds.",
+          "status": "pending",
+          "assignedTo": "agent",
+          "acceptanceCriteria": [
+            "player_get_state returns structured playback snapshot in <= 150ms",
+            "Handles paused, buffering, and unstarted player states gracefully"
+          ],
+          "references": ["PRD:FR-2.1", "TDD:Module 1"]
+        },
+        {
+          "id": "TASK-302",
+          "title": "Implement Queue Inspection",
+          "description": "Query ytmusic-player-queue items to expose ordered list of played, active, and upcoming tracks.",
+          "status": "pending",
+          "assignedTo": "agent",
+          "acceptanceCriteria": [
+            "queue_inspect returns currentIndex and array of tracks with status tags",
+            "Reflects dynamically updated queue without DOM freezing"
+          ],
+          "references": ["PRD:FR-2.2", "TDD:Module 1"]
+        },
+        {
+          "id": "TASK-303",
+          "title": "Implement In-Place Queue Mutation & Navigation",
+          "description": "Execute non-disruptive queue insertion (relative offset, append), track removal, and jump-to-index using Polymer store dispatch.",
+          "status": "pending",
+          "assignedTo": "agent",
+          "acceptanceCriteria": [
+            "queue_insert_relative inserts track right next to active song without page reload",
+            "queue_append appends tracks to end of queue",
+            "queue_jump_to navigates to index without audio stutter"
+          ],
+          "references": ["PRD:FR-3.1", "PRD:FR-3.2", "PRD:FR-3.4", "TDD:Module 1"]
+        }
+      ]
+    },
+    {
+      "id": "phase-4",
+      "name": "InnerTube Client & Graph Traversal",
+      "tasks": [
+        {
+          "id": "TASK-401",
+          "title": "Implement Semantic Search Client",
+          "description": "Send search queries to /youtubei/v1/music/search using authenticated session headers and parse song results.",
+          "status": "pending",
+          "assignedTo": "agent",
+          "acceptanceCriteria": [
+            "music_search returns top matches with videoId, title, artist, and duration",
+            "Returns empty array or helpful error when query has no matches"
+          ],
+          "references": ["PRD:FR-4.1", "TDD:Module 2"]
+        },
+        {
+          "id": "TASK-402",
+          "title": "Implement Radio Seeds & Watch Next Extraction",
+          "description": "Query /youtubei/v1/next endpoint with target videoId to extract YouTube Music co-listening and radio candidates.",
+          "status": "pending",
+          "assignedTo": "agent",
+          "acceptanceCriteria": [
+            "music_get_radio_seeds returns candidate tracks for transition bridging",
+            "Deduplicates against active queue items"
+          ],
+          "references": ["PRD:FR-4.2", "TDD:Module 2"]
+        }
+      ]
+    },
+    {
+      "id": "phase-5",
+      "name": "MCP Server & Stdio Proxy Bridge",
+      "tasks": [
+        {
+          "id": "TASK-501",
+          "title": "Implement Embedded MCP SSE Server on Port 4382",
+          "description": "Expose all 8 defined MCP tools via Model Context Protocol SDK over SSE endpoint http://127.0.0.1:4382/sse.",
+          "status": "pending",
+          "assignedTo": "agent",
+          "acceptanceCriteria": [
+            "SSE server starts on port 4382 on app boot",
+            "Responds to MCP initialize, list_tools, and call_tool requests",
+            "Input schemas validated with Zod"
+          ],
+          "references": ["PRD:FR-5.1", "TDD:MCP Tool Interface Definitions"]
+        },
+        {
+          "id": "TASK-502",
+          "title": "Implement Stdio Bridge CLI (ytmusic-mcp-bridge)",
+          "description": "Develop zero-dependency CLI wrapper that connects stdio to the local SSE endpoint for Claude Desktop / Cursor compatibility.",
+          "status": "pending",
+          "assignedTo": "agent",
+          "acceptanceCriteria": [
+            "Pipes stdin/stdout transparently to localhost:4382",
+            "Provides clear error message if Electron host is not running"
+          ],
+          "references": ["PRD:FR-5.2", "TDD:Packaging, Distribution & Deployment"]
+        }
+      ]
+    }
+  ]
+}
