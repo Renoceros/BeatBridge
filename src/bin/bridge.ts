@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import readline from 'readline';
 import { URL } from 'url';
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -14,28 +14,28 @@ async function main() {
     }
   }
 
-  const sseUrl = new URL(`http://127.0.0.1:${port}/sse`);
-  const sseTransport = new SSEClientTransport(sseUrl);
+  const endpointUrl = new URL(`http://127.0.0.1:${port}/sse`);
+  const transport = new StreamableHTTPClientTransport(endpointUrl);
 
-  sseTransport.onerror = (err) => {
+  transport.onerror = (err) => {
     process.stderr.write(`[ytmusic-mcp-bridge] Transport error: ${err.message || err}\n`);
   };
 
-  sseTransport.onclose = () => {
-    process.stderr.write('[ytmusic-mcp-bridge] SSE connection closed. Exiting.\n');
+  transport.onclose = () => {
+    process.stderr.write('[ytmusic-mcp-bridge] Connection closed. Exiting.\n');
     process.exit(0);
   };
 
-  sseTransport.onmessage = (message) => {
+  transport.onmessage = (message) => {
     process.stdout.write(JSON.stringify(message) + '\n');
   };
 
   try {
-    await sseTransport.start();
+    await transport.start();
   } catch (err: any) {
     process.stderr.write(
-      `[ytmusic-mcp-bridge] Failed to connect to BeatBridge host at ${sseUrl.toString()}.\n` +
-      `Ensure Project BeatBridge (ytmusic-mcp-dj) is running on port ${port}.\n`
+      `[ytmusic-mcp-bridge] Failed to connect to BeatBridge host at ${endpointUrl.toString()}.\n` +
+      `Ensure Project BeatBridge daemon is running on port ${port}.\n`
     );
     process.exit(1);
   }
@@ -51,19 +51,19 @@ async function main() {
     if (!trimmed) return;
     try {
       const json = JSON.parse(trimmed);
-      await sseTransport.send(json);
+      await transport.send(json);
     } catch (err: any) {
       process.stderr.write(`[ytmusic-mcp-bridge] Failed to send message: ${err.message}\n`);
     }
   });
 
   process.on('SIGINT', async () => {
-    await sseTransport.close();
+    await transport.close();
     process.exit(0);
   });
 
   process.on('SIGTERM', async () => {
-    await sseTransport.close();
+    await transport.close();
     process.exit(0);
   });
 }

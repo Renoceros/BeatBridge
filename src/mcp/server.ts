@@ -1,7 +1,7 @@
 import http from 'http';
 import { URL } from 'url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { ExtensionBridge } from '../server/extensionBridge.js';
 
@@ -157,12 +157,17 @@ export function startMcpHttpServer(
   provider: PlaybackProvider,
   extensionBridge?: ExtensionBridge
 ): http.Server {
-  const transports = new Map<string, SSEServerTransport>();
+  const mcpServer = createBeatBridgeMcpServer(provider);
+  const streamableTransport = new StreamableHTTPServerTransport();
+
+  mcpServer.connect(streamableTransport).catch((err) => {
+    console.error('[BeatBridge MCP] Transport error:', err);
+  });
 
   const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(200).end();
@@ -172,53 +177,23 @@ export function startMcpHttpServer(
     const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
     console.log(`[BeatBridge MCP] ${req.method} ${req.url}`);
 
-    if (req.method === 'GET' && (parsedUrl.pathname === '/sse' || parsedUrl.pathname === '/')) {
-      const transport = new SSEServerTransport('/message', res);
-      const mcpServer = createBeatBridgeMcpServer(provider);
-
-      transports.set(transport.sessionId, transport);
-      console.log(`[BeatBridge MCP] Client connected to SSE stream (sessionId: ${transport.sessionId})`);
-
-      transport.onclose = () => {
-        console.log(`[BeatBridge MCP] Client closed SSE stream (sessionId: ${transport.sessionId})`);
-        transports.delete(transport.sessionId);
-      };
-
-      await mcpServer.connect(transport);
-      return;
-    }
-
-    if (req.method === 'POST' && (parsedUrl.pathname.startsWith('/message') || parsedUrl.pathname === '/sse' || parsedUrl.pathname === '/')) {
-      const sessionId = parsedUrl.searchParams.get('sessionId') || parsedUrl.searchParams.get('session_id');
-      let transport: SSEServerTransport | undefined;
-
-      if (sessionId && transports.has(sessionId)) {
-        transport = transports.get(sessionId);
-      } else if (transports.size === 1) {
-        transport = Array.from(transports.values())[0];
-      } else if (transports.size > 1) {
-        const all = Array.from(transports.values());
-        transport = all[all.length - 1];
-      }
-
-      if (!transport) {
-        console.warn(`[BeatBridge MCP] 404 on POST ${req.url}: No active SSE session found. Active: ${transports.size}`);
-        res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Session not found. Connect to /sse first.');
-        return;
-      }
-
-      await transport.handlePostMessage(req, res);
-      return;
-    }
-
     if (req.method === 'GET' && parsedUrl.pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         status: 'ok',
-        activeSessions: transports.size,
         extensionConnected: extensionBridge ? extensionBridge.isConnected() : false,
         activeProvider: extensionBridge ? extensionBridge.getActiveProvider() : 'direct'
       }));
+      return;
+    }
+
+    if (
+      parsedUrl.pathname === '/sse' ||
+      parsedUrl.pathname === '/mcp' ||
+      parsedUrl.pathname === '/' ||
+      parsedUrl.pathname.startsWith('/message')
+    ) {
+      await streamableTransport.handleRequest(req, res);
       return;
     }
 
