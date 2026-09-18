@@ -91,20 +91,61 @@ async function queueTrackViaMenu(queryOrId, position = 'next') {
   }
 }
 
+function scoreTrackMatch(item, query) {
+  const queryLower = query.toLowerCase();
+  const searchTerms = queryLower.split(/\s+/).filter(w => w.length > 1);
+
+  const titleEl = item.querySelector('.title') || item.querySelector('.song-title') || item.querySelector('a');
+  const title = titleEl ? titleEl.textContent.trim().toLowerCase() : '';
+  const fullText = item.textContent.trim().toLowerCase();
+
+  // Must contain all core search terms
+  if (!searchTerms.every(term => fullText.includes(term))) {
+    return -1000;
+  }
+
+  let score = 100;
+
+  // 1. Prioritize official songs over video / fan uploads
+  if (fullText.includes('song •') || fullText.includes('song\n') || item.querySelector('ytmusic-item-thumbnail-overlay-renderer')) {
+    score += 60;
+  }
+
+  // 2. Penalize acoustic, live, remix, cover, instrumental unless explicitly requested
+  const unwantedModifiers = ['acoustic', 'live', 'remix', 'cover', 'instrumental', 'karaoke', 'tribute', 'slowed', 'reverb', '8d'];
+  for (const mod of unwantedModifiers) {
+    if (!queryLower.includes(mod)) {
+      if (title.includes(mod)) score -= 80;
+      else if (fullText.includes(mod)) score -= 40;
+    }
+  }
+
+  // 3. Exact clean title match bonus (e.g. title is strictly "decode", not "decode (acoustic)")
+  const cleanTitle = title.replace(/\(.*?\)/g, '').replace(/\[.*?\]/g, '').trim();
+  for (const term of searchTerms) {
+    if (cleanTitle === term) {
+      score += 40;
+    }
+  }
+  if (cleanTitle === queryLower || queryLower.includes(cleanTitle)) {
+    score += 30;
+  }
+
+  return score;
+}
+
 async function doQueueTrack(queryOrId, position = 'next') {
-  const searchTerms = queryOrId.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+  function findBestMatch(items) {
+    const scored = items
+      .map(item => ({ item, score: scoreTrackMatch(item, queryOrId) }))
+      .filter(c => c.score > 0)
+      .sort((a, b) => b.score - a.score);
+    return scored[0]?.item || null;
+  }
 
   // 1. Check if track is already present in current page results
   const existingItems = Array.from(document.querySelectorAll('ytmusic-responsive-list-item-renderer'));
-  let targetItem = null;
-
-  for (const item of existingItems) {
-    const fullText = item.textContent.trim().toLowerCase();
-    if (searchTerms.every(term => fullText.includes(term))) {
-      targetItem = item;
-      break;
-    }
-  }
+  let targetItem = findBestMatch(existingItems);
 
   // 2. If not found, perform search in YouTube Music without interrupting playback
   if (!targetItem) {
@@ -125,18 +166,13 @@ async function doQueueTrack(queryOrId, position = 'next') {
       searchInput.dispatchEvent(new Event('change', { bubbles: true }));
       searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
 
-      // Wait for search results and strictly match target keywords across item text
+      // Wait for search results and pick highest-scoring studio match
       for (let i = 0; i < 25; i++) {
         await new Promise(r => setTimeout(r, 200));
         const items = Array.from(document.querySelectorAll('ytmusic-responsive-list-item-renderer'));
-        
-        const matched = items.find(item => {
-          const fullText = item.textContent.trim().toLowerCase();
-          return searchTerms.every(term => fullText.includes(term));
-        });
-
-        if (matched) {
-          targetItem = matched;
+        const best = findBestMatch(items);
+        if (best) {
+          targetItem = best;
           break;
         }
       }
