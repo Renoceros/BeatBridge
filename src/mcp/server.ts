@@ -170,13 +170,17 @@ export function startMcpHttpServer(
     }
 
     const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
+    console.log(`[BeatBridge MCP] ${req.method} ${req.url}`);
 
-    if (req.method === 'GET' && parsedUrl.pathname === '/sse') {
+    if (req.method === 'GET' && (parsedUrl.pathname === '/sse' || parsedUrl.pathname === '/')) {
       const transport = new SSEServerTransport('/message', res);
       const mcpServer = createBeatBridgeMcpServer(provider);
 
       transports.set(transport.sessionId, transport);
+      console.log(`[BeatBridge MCP] Client connected to SSE stream (sessionId: ${transport.sessionId})`);
+
       transport.onclose = () => {
+        console.log(`[BeatBridge MCP] Client closed SSE stream (sessionId: ${transport.sessionId})`);
         transports.delete(transport.sessionId);
       };
 
@@ -184,14 +188,25 @@ export function startMcpHttpServer(
       return;
     }
 
-    if (req.method === 'POST' && parsedUrl.pathname.startsWith('/message')) {
-      const sessionId = parsedUrl.searchParams.get('sessionId');
-      if (!sessionId || !transports.has(sessionId)) {
-        res.writeHead(404).end('Session not found');
+    if (req.method === 'POST' && (parsedUrl.pathname.startsWith('/message') || parsedUrl.pathname === '/sse' || parsedUrl.pathname === '/')) {
+      const sessionId = parsedUrl.searchParams.get('sessionId') || parsedUrl.searchParams.get('session_id');
+      let transport: SSEServerTransport | undefined;
+
+      if (sessionId && transports.has(sessionId)) {
+        transport = transports.get(sessionId);
+      } else if (transports.size === 1) {
+        transport = Array.from(transports.values())[0];
+      } else if (transports.size > 1) {
+        const all = Array.from(transports.values());
+        transport = all[all.length - 1];
+      }
+
+      if (!transport) {
+        console.warn(`[BeatBridge MCP] 404 on POST ${req.url}: No active SSE session found. Active: ${transports.size}`);
+        res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Session not found. Connect to /sse first.');
         return;
       }
 
-      const transport = transports.get(sessionId)!;
       await transport.handlePostMessage(req, res);
       return;
     }
