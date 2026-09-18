@@ -56,50 +56,109 @@ export class InnerTubeClient {
   async search(query: string, limit: number = 5): Promise<SearchResult[]> {
     try {
       const data = await this.fetchYouTubei('search', { query });
-      const results: SearchResult[] = [];
+      const rawResults: (SearchResult & { isSong: boolean; isHero: boolean })[] = [];
+      const queryLower = query.toLowerCase();
+      const disqualifiers = ['karaoke', 'tribute', 'instrumental', 'backing track', 'minus one', 'cover'];
+
+      function isDisqualified(text: string): boolean {
+        const t = text.toLowerCase();
+        for (const d of disqualifiers) {
+          if (!queryLower.includes(d) && t.includes(d)) return true;
+        }
+        return false;
+      }
 
       // Navigate YouTubei sectionListRenderer structure
       const sections = data?.contents?.tabbedSearchResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
 
       for (const section of sections) {
-        const shelf = section.musicShelfRenderer || section.musicCardShelfRenderer;
-        if (!shelf) continue;
-
-        const contents = shelf.contents || [];
-        for (const item of contents) {
-          if (results.length >= limit) break;
-
-          const renderer = item.musicResponsiveListItemRenderer;
-          if (!renderer) continue;
-
-          const flexColumns = renderer.flexColumns || [];
-          const titleCol = flexColumns[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0];
-          const title = titleCol?.text || '';
-          
-          let videoId = titleCol?.navigationEndpoint?.watchEndpoint?.videoId;
-          if (!videoId) {
-            videoId = renderer.playlistItemData?.videoId || renderer.menu?.menuRenderer?.topLevelButtons?.[0]?.likeButtonRenderer?.target?.videoId;
+        // 1. Check musicCardShelfRenderer (Top Result / Hero Card)
+        if (section.musicCardShelfRenderer) {
+          const card = section.musicCardShelfRenderer;
+          const cardTitle = card.title?.runs?.[0]?.text || '';
+          const cardSubtitle = card.subtitle?.runs?.map((r: any) => r.text).join('') || '';
+          const cardVideoId = card.onTap?.watchEndpoint?.videoId || 
+                              card.buttons?.[0]?.buttonRenderer?.command?.watchEndpoint?.videoId;
+          if (cardVideoId && cardTitle && !isDisqualified(cardTitle) && !isDisqualified(cardSubtitle)) {
+            const isSong = cardSubtitle.toLowerCase().includes('song');
+            rawResults.push({
+              videoId: cardVideoId,
+              title: cardTitle,
+              artist: cardSubtitle,
+              duration: '0:00',
+              isSong,
+              isHero: true
+            });
           }
+        }
 
-          const bylineRuns = flexColumns[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
-          const artist = bylineRuns[0]?.text || 'Unknown Artist';
-          
-          // Last run is often duration or duration is in flexColumns
-          let duration = '0:00';
-          for (let i = bylineRuns.length - 1; i >= 0; i--) {
-            if (/^\d+:\d+$/.test(bylineRuns[i].text?.trim())) {
-              duration = bylineRuns[i].text.trim();
-              break;
+        // 2. Check musicShelfRenderer or itemSectionRenderer
+        const shelf = section.musicShelfRenderer || section.itemSectionRenderer;
+        if (shelf && shelf.contents) {
+          for (const item of shelf.contents) {
+            const renderer = item.musicResponsiveListItemRenderer;
+            if (!renderer) continue;
+
+            const flexColumns = renderer.flexColumns || [];
+            const titleCol = flexColumns[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0];
+            const title = titleCol?.text || '';
+            
+            let videoId = titleCol?.navigationEndpoint?.watchEndpoint?.videoId;
+            if (!videoId) {
+              videoId = renderer.playlistItemData?.videoId || renderer.menu?.menuRenderer?.topLevelButtons?.[0]?.likeButtonRenderer?.target?.videoId;
             }
-          }
 
-          if (videoId && title) {
-            results.push({ videoId, title, artist, duration });
+            const bylineRuns = flexColumns[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || [];
+            const artist = bylineRuns.map((r: any) => r.text).join('') || 'Unknown Artist';
+
+            if (!videoId || !title) continue;
+            if (isDisqualified(title) || isDisqualified(artist)) continue;
+
+            let duration = '0:00';
+            for (let i = bylineRuns.length - 1; i >= 0; i--) {
+              if (/^\d+:\d+$/.test(bylineRuns[i].text?.trim())) {
+                duration = bylineRuns[i].text.trim();
+                break;
+              }
+            }
+
+            const isSong = artist.toLowerCase().includes('song');
+            rawResults.push({
+              videoId,
+              title,
+              artist,
+              duration,
+              isSong,
+              isHero: false
+            });
           }
         }
       }
 
-      return results.slice(0, limit);
+      // Prioritize studio songs
+      rawResults.sort((a, b) => {
+        if (a.isSong && !b.isSong) return -1;
+        if (!a.isSong && b.isSong) return 1;
+        return 0;
+      });
+
+      // Deduplicate by videoId
+      const seen = new Set<string>();
+      const results: SearchResult[] = [];
+      for (const r of rawResults) {
+        if (!seen.has(r.videoId)) {
+          seen.add(r.videoId);
+          results.push({
+            videoId: r.videoId,
+            title: r.title,
+            artist: r.artist,
+            duration: r.duration
+          });
+          if (results.length >= limit) break;
+        }
+      }
+
+      return results;
     } catch (err: any) {
       console.error('[InnerTubeClient.search error]:', err);
       return [];

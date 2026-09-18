@@ -103,6 +103,12 @@ async function detectActiveProvider() {
 }
 
 async function handleMcpCommand(msg) {
+  if (msg.action === 'extension_reload') {
+    socket.send(JSON.stringify({ id: msg.id, result: { success: true } }));
+    setTimeout(() => { chrome.runtime.reload(); }, 100);
+    return;
+  }
+
   const tab = await findMusicTab();
 
   if (!tab || !tab.id) {

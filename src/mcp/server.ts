@@ -2,6 +2,7 @@ import http from 'http';
 import { URL } from 'url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
 import { ExtensionBridge } from '../server/extensionBridge.js';
 
@@ -159,18 +160,19 @@ export function startMcpHttpServer(
   provider: PlaybackProvider,
   extensionBridge?: ExtensionBridge
 ): http.Server {
-  const sessions = new Map<string, StreamableHTTPServerTransport>();
+  const sseSessions = new Map<string, SSEServerTransport>();
+  const httpSessions = new Map<string, StreamableHTTPServerTransport>();
 
-  function createSession(): StreamableHTTPServerTransport {
+  function createHttpSession(): StreamableHTTPServerTransport {
     const mcpServer = createBeatBridgeMcpServer(provider);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       enableJsonResponse: true,
       onsessioninitialized: (initializedSid) => {
-        sessions.set(initializedSid, transport);
+        httpSessions.set(initializedSid, transport);
       },
       onsessionclosed: (closedSid) => {
-        sessions.delete(closedSid);
+        httpSessions.delete(closedSid);
       }
     });
 
@@ -204,13 +206,39 @@ export function startMcpHttpServer(
       return;
     }
 
-    if (
-      parsedUrl.pathname === '/sse' ||
-      parsedUrl.pathname === '/mcp' ||
-      parsedUrl.pathname === '/' ||
-      parsedUrl.pathname.startsWith('/message')
-    ) {
-      // Normalize Accept header for streamable HTTP transport compatibility
+    // 1. Classic MCP SSE Transport (/sse and /message)
+    if (req.method === 'GET' && parsedUrl.pathname === '/sse') {
+      try {
+        const transport = new SSEServerTransport('/message', res);
+        sseSessions.set(transport.sessionId, transport);
+        transport.onclose = () => {
+          sseSessions.delete(transport.sessionId);
+        };
+        const mcpServer = createBeatBridgeMcpServer(provider);
+        await mcpServer.connect(transport);
+      } catch (err: any) {
+        console.error('[BeatBridge MCP] SSE connect error:', err);
+        if (!res.headersSent) {
+          res.writeHead(500).end();
+        }
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && (parsedUrl.pathname === '/message' || parsedUrl.pathname.startsWith('/message'))) {
+      const sessionId = parsedUrl.searchParams.get('sessionId');
+      const transport = sessionId ? sseSessions.get(sessionId) : undefined;
+      if (transport) {
+        await transport.handlePostMessage(req, res);
+        return;
+      }
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: `Session '${sessionId}' not found` }));
+      return;
+    }
+
+    // 2. Streamable HTTP Transport (/mcp, /, or POST /sse)
+    if (parsedUrl.pathname === '/mcp' || parsedUrl.pathname === '/' || parsedUrl.pathname === '/sse') {
       if (!req.headers.accept || req.headers.accept === '*/*') {
         req.headers.accept = 'application/json, text/event-stream';
       } else if (!req.headers.accept.includes('text/event-stream')) {
@@ -219,9 +247,9 @@ export function startMcpHttpServer(
 
       if (req.method === 'GET') {
         const sidHeader = req.headers['mcp-session-id'] as string | undefined;
-        let transport = sidHeader ? sessions.get(sidHeader) : undefined;
+        let transport = sidHeader ? httpSessions.get(sidHeader) : undefined;
         if (!transport) {
-          transport = createSession();
+          transport = createHttpSession();
         }
         try {
           await transport.handleRequest(req, res);
@@ -234,7 +262,6 @@ export function startMcpHttpServer(
         return;
       }
 
-      // Read request body for POST
       let body = '';
       req.on('data', (chunk) => {
         body += chunk;
@@ -257,10 +284,10 @@ export function startMcpHttpServer(
               (Array.isArray(parsed) && parsed.some((p: any) => p.method === 'initialize')));
 
           const sidHeader = req.headers['mcp-session-id'] as string | undefined;
-          let transport = sidHeader ? sessions.get(sidHeader) : undefined;
+          let transport = sidHeader ? httpSessions.get(sidHeader) : undefined;
 
           if (isInit || !transport) {
-            transport = createSession();
+            transport = createHttpSession();
           }
 
           await transport.handleRequest(req, res, parsed);

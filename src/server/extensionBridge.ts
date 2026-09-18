@@ -1,6 +1,7 @@
 import { WebSocket, WebSocketServer } from 'ws';
 import http from 'http';
 import crypto from 'crypto';
+import { InnerTubeClient } from '../innertube/client.js';
 
 export interface ExtensionMessage {
   id?: string;
@@ -119,11 +120,21 @@ export class ExtensionBridge {
     return await this.sendCommand('player_get_state');
   }
 
+  private innerTube = new InnerTubeClient();
+
   async inspectQueue() {
     return await this.sendCommand('queue_inspect');
   }
 
   async search(query: string, limit: number = 5) {
+    if (this.activeProvider === 'ytmusic' || this.activeProvider === 'none') {
+      try {
+        const results = await this.innerTube.search(query, limit);
+        if (results && results.length > 0) return results;
+      } catch (err: any) {
+        console.warn('[ExtensionBridge] InnerTube search fallback to extension:', err.message);
+      }
+    }
     return await this.sendCommand('music_search', { query, limit });
   }
 
