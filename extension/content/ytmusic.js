@@ -124,46 +124,68 @@ function scoreTrackMatch(item, query) {
                     item.querySelector('yt-formatted-string.ytmusic-responsive-list-item-renderer') ||
                     item.querySelector('a')
                   ) : null;
+  const bylineEl = (item && typeof item.querySelector === 'function') ? (
+                    item.querySelector('.subtitle') ||
+                    item.querySelector('.byline') || 
+                    item.querySelector('.secondary-flex-columns') ||
+                    item.querySelector('yt-formatted-string.subtitle')
+                  ) : null;
+
   const title = titleEl ? normalize(titleEl.textContent) : (item?.title ? normalize(item.title) : '');
+  const byline = bylineEl ? normalize(bylineEl.textContent) : (item?.artist ? normalize(item.artist) : '');
   const fullText = normalize((item && item.textContent) ? item.textContent : `${item?.title || ''} ${item?.artist || ''}`);
 
-  // Strict Disqualification: NEVER pick karaoke, tribute, instrumental, cover, backing track unless requested
-  const disqualifiers = ['karaoke', 'tribute', 'instrumental', 'backing track', 'minus one', 'cover'];
+  // Strict Disqualification: NEVER pick karaoke, tribute, instrumental, cover, backing track, TV clips, reactions, podcasts
+  const disqualifiers = [
+    'karaoke', 'tribute', 'instrumental', 'backing track', 'minus one', 'cover',
+    'interview', 'reaction', 'react', 'the noite', 'podcast', 'parody', 'talk show',
+    'clip', 'episode', 'review'
+  ];
   for (const dq of disqualifiers) {
-    if (!queryNorm.includes(dq) && (title.includes(dq) || fullText.includes(dq))) {
+    if (!queryNorm.includes(dq) && (title.includes(dq) || byline.includes(dq))) {
       return -100000;
     }
   }
 
-  // Must contain core search terms (at least 60% of search terms or all if <= 2 terms)
-  const matchedTerms = searchTerms.filter(term => fullText.includes(term));
+  // Must contain core search terms (at least 50% of search terms)
+  const matchedTerms = searchTerms.filter(term => 
+    fullText.includes(term) || (term.length >= 5 && fullText.includes(term.slice(0, -2)))
+  );
   if (searchTerms.length <= 2 && matchedTerms.length < searchTerms.length) {
     return -10000;
   }
-  if (matchedTerms.length < Math.ceil(searchTerms.length * 0.6)) {
+  if (matchedTerms.length < Math.ceil(searchTerms.length * 0.5)) {
     return -10000;
   }
 
   let score = 100;
 
   // 1. Prioritize official songs over video / fan uploads
-  if (fullText.includes('song') || (item && typeof item.querySelector === 'function' && item.querySelector('ytmusic-item-thumbnail-overlay-renderer'))) {
+  if (byline.startsWith('song') || byline.includes('song')) {
+    score += 100; // Strong bonus for official studio audio tracks
+  } else if (byline.startsWith('video') || byline.includes('video')) {
+    score -= 60; // Penalize video uploads when official songs are present
+  }
+
+  // 2. Artist match bonus in byline
+  const artistMatch = searchTerms.some(term => byline.includes(term) || (term.length >= 5 && byline.includes(term.slice(0, -2))));
+  if (artistMatch) {
     score += 60;
   }
 
-  // 2. Penalize acoustic, live, remix unless requested
+  // 3. Penalize acoustic, live, remix unless requested
   const unwantedModifiers = ['acoustic', 'live', 'remix', 'slowed', 'reverb', '8d'];
   for (const mod of unwantedModifiers) {
     if (!queryNorm.includes(mod)) {
       if (title.includes(mod)) score -= 80;
-      else if (fullText.includes(mod)) score -= 40;
+      else if (byline.includes(mod)) score -= 40;
     }
   }
 
-  // 3. Exact clean title match bonus
+  // 4. Exact clean title match bonus
   const cleanTitle = title.replace(/\(.*?\)/g, '').replace(/\[.*?\]/g, '').trim();
-  if (cleanTitle === queryNorm || queryNorm.includes(cleanTitle)) {
-    score += 40;
+  if (cleanTitle === queryNorm || queryNorm.includes(cleanTitle) || cleanTitle.includes(queryNorm)) {
+    score += 50;
   }
   for (const term of searchTerms) {
     if (cleanTitle === term) score += 20;
@@ -173,19 +195,6 @@ function scoreTrackMatch(item, query) {
 }
 
 async function doQueueTrack(queryOrId, position = 'next') {
-  // 0. If position === 'next', check if track is ALREADY queued as Up Next
-  if (position === 'next') {
-    const curQueue = inspectQueue();
-    const nextItem = curQueue.items[curQueue.currentIndex + 1];
-    if (nextItem && nextItem.title) {
-      const simScore = scoreTrackMatch({ textContent: `${nextItem.title} ${nextItem.artist}` }, queryOrId);
-      if (simScore >= 80) {
-        console.log('[BeatBridge] Track already queued as Up Next:', nextItem.title);
-        return { success: true, queued: nextItem.title, position, alreadyQueued: true };
-      }
-    }
-  }
-
   // 1. Actually click and open the search bar in the header
   const searchBox = document.querySelector('ytmusic-search-box');
   if (searchBox) {
@@ -244,15 +253,22 @@ async function doQueueTrack(queryOrId, position = 'next') {
   for (let i = 0; i < candidates.length; i++) {
     const item = candidates[i];
     const score = scoreTrackMatch(item, queryOrId);
+    const titleEl = item.querySelector('.title') || item.querySelector('.song-title') || item.querySelector('a');
+    const titleStr = titleEl ? titleEl.textContent.trim() : item.textContent.slice(0, 30);
+    try {
+      chrome.runtime.sendMessage({ type: 'content_log', data: `Candidate ${i}: "${titleStr}" -> score: ${score}` });
+    } catch (e) {}
+
     if (score < 80) continue; // Disqualified or poor candidate
 
     // Top-to-bottom ranking preference: earlier results in DOM get a position bonus
     const topBonus = Math.max(0, 30 - i * 3);
     const totalScore = score + topBonus;
-    scoredCandidates.push({ item, totalScore });
+    scoredCandidates.push({ item, totalScore, titleStr });
   }
 
   scoredCandidates.sort((a, b) => b.totalScore - a.totalScore);
+
 
   // 5. Try each ranked candidate from top to bottom until one successfully plays next
   for (const { item: targetItem } of scoredCandidates) {
