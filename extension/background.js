@@ -4,6 +4,17 @@ let reconnectTimer = null;
 let heartbeatInterval = null;
 const WS_URL = 'ws://127.0.0.1:4382/ws';
 
+function logToDaemon(...args) {
+  try {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        type: 'log',
+        data: args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ')
+      }));
+    }
+  } catch (e) {}
+}
+
 function startHeartbeat() {
   stopHeartbeat();
   heartbeatInterval = setInterval(() => {
@@ -120,48 +131,75 @@ async function handleMcpCommand(msg) {
     return;
   }
 
-  try {
-    // Send command directly to content script in active tab
-    const response = await chrome.tabs.sendMessage(tab.id, {
-      action: msg.action,
-      params: msg.params || {}
-    });
+  logToDaemon('[BG] Received action:', msg.action, 'for tab:', tab ? tab.id : 'null', tab ? tab.url : '');
 
+  const file = (tab.url && tab.url.includes('music.youtube.com'))
+    ? 'content/ytmusic.js'
+    : (tab.url && tab.url.includes('spotify.com'))
+    ? 'content/spotify.js'
+    : 'content/soundcloud.js';
+
+  const sendWithTimeout = (tabId, msgPayload, ms) => {
+    return new Promise((resolve, reject) => {
+      let done = false;
+      const t = setTimeout(() => {
+        if (!done) {
+          done = true;
+          reject(new Error(`sendMessage timed out after ${ms}ms`));
+        }
+      }, ms);
+
+      try {
+        chrome.tabs.sendMessage(tabId, msgPayload, (response) => {
+          if (done) return;
+          done = true;
+          clearTimeout(t);
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(response);
+          }
+        });
+      } catch (err) {
+        if (!done) {
+          done = true;
+          clearTimeout(t);
+          reject(err);
+        }
+      }
+    });
+  };
+
+  try {
+    let response;
+    try {
+      response = await sendWithTimeout(tab.id, { action: msg.action, params: msg.params || {} }, 25000);
+    } catch (firstErr) {
+      if (firstErr.message && firstErr.message.includes('Receiving end does not exist')) {
+        logToDaemon('[BG] Receiving end does not exist, injecting ' + file);
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: [file]
+          });
+          await new Promise(r => setTimeout(r, 300));
+        } catch (injErr) {
+          logToDaemon('[BG] Injection error:', injErr.message);
+        }
+        response = await sendWithTimeout(tab.id, { action: msg.action, params: msg.params || {} }, 25000);
+      } else {
+        throw firstErr;
+      }
+    }
+
+    logToDaemon('[BG] Success from tab:', JSON.stringify(response));
     socket.send(JSON.stringify({
       id: msg.id,
       result: response?.result !== undefined ? response.result : response,
       error: response?.error || null
     }));
   } catch (err) {
-    if (err.message && err.message.includes('Receiving end does not exist')) {
-      try {
-        const file = (tab.url && tab.url.includes('music.youtube.com'))
-          ? 'content/ytmusic.js'
-          : (tab.url && tab.url.includes('spotify.com'))
-          ? 'content/spotify.js'
-          : 'content/soundcloud.js';
-
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          files: [file]
-        });
-
-        const retryResponse = await chrome.tabs.sendMessage(tab.id, {
-          action: msg.action,
-          params: msg.params || {}
-        });
-
-        socket.send(JSON.stringify({
-          id: msg.id,
-          result: retryResponse?.result !== undefined ? retryResponse.result : retryResponse,
-          error: retryResponse?.error || null
-        }));
-        return;
-      } catch (injectErr) {
-        // Fallback to reporting original error
-      }
-    }
-
+    logToDaemon('[BG] Final error:', err.message);
     socket.send(JSON.stringify({
       id: msg.id,
       result: null,
@@ -170,8 +208,12 @@ async function handleMcpCommand(msg) {
   }
 }
 
-// Handle status request from popup
+// Handle status request from popup and logs from content script
 chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
+  if (req.type === 'content_log') {
+    logToDaemon('[Content]', req.data);
+    return;
+  }
   if (req.type === 'getStatus') {
     const isConnected = socket !== null && socket.readyState === WebSocket.OPEN;
     sendResponse({

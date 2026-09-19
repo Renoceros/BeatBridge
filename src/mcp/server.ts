@@ -206,6 +206,51 @@ export function startMcpHttpServer(
       return;
     }
 
+    if (req.method === 'POST' && parsedUrl.pathname === '/reload') {
+      try {
+        if (extensionBridge && (extensionBridge as any).reloadExtension) {
+          const result = await (extensionBridge as any).reloadExtension();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, result }));
+        } else {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'No extension bridge attached' }));
+        }
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && parsedUrl.pathname === '/command') {
+      try {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+          try {
+            if (!extensionBridge) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'No extension bridge' }));
+              return;
+            }
+            const parsed = body ? JSON.parse(body) : {};
+            const result = await extensionBridge.sendCommand(parsed.action, parsed.params || {});
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, result }));
+          } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+          }
+        });
+      } catch (err: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+
     // 1. Classic MCP SSE Transport (/sse and /message)
     if (req.method === 'GET' && parsedUrl.pathname === '/sse') {
       try {

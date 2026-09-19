@@ -11,6 +11,7 @@ export interface ExtensionMessage {
   params?: any;
   result?: any;
   error?: string | null;
+  data?: any;
 }
 
 export class ExtensionBridge {
@@ -49,6 +50,11 @@ export class ExtensionBridge {
 
           if (msg.type === 'ping') {
             ws.send(JSON.stringify({ type: 'pong' }));
+            return;
+          }
+
+          if (msg.type === 'log') {
+            console.log(`[Extension Log] ${msg.data}`);
             return;
           }
 
@@ -107,9 +113,9 @@ export class ExtensionBridge {
       const timer = setTimeout(() => {
         if (this.pendingRequests.has(id)) {
           this.pendingRequests.delete(id);
-          reject(new Error(`Command '${action}' timed out after 10 seconds`));
+          reject(new Error(`Command '${action}' timed out after 25 seconds`));
         }
-      }, 10000);
+      }, 25000);
 
       this.pendingRequests.set(id, { resolve, reject, timer });
       this.activeSocket!.send(payload);
@@ -160,5 +166,9 @@ export class ExtensionBridge {
 
   async playerControl(action: string, seekSeconds?: number) {
     return await this.sendCommand('player_control', { action, seekSeconds });
+  }
+
+  async reloadExtension() {
+    return await this.sendCommand('extension_reload');
   }
 }

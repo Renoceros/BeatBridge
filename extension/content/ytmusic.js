@@ -1,4 +1,7 @@
 // BeatBridge Content Script: YouTube Music Controller
+try {
+  chrome.runtime.sendMessage({ type: 'content_log', data: `Script initialized on ${window.location.href}` });
+} catch (e) {}
 
 function getPlayerState() {
   const playerBar = document.querySelector('ytmusic-player-bar');
@@ -59,6 +62,15 @@ function inspectQueue() {
     return { index: idx, videoId, title, artist };
   });
 
+  const playerBar = document.querySelector('ytmusic-player-bar');
+  const barTitle = playerBar?.querySelector('.title')?.textContent?.trim()?.toLowerCase();
+  if (barTitle) {
+    const matchIdx = raw.findIndex(t => t.title && t.title.toLowerCase() === barTitle);
+    if (matchIdx !== -1) {
+      currentIndex = matchIdx;
+    }
+  }
+
   const items = raw.map((item, idx) => {
     let status = 'upcoming';
     if (currentIndex !== -1) {
@@ -76,8 +88,18 @@ function inspectQueue() {
 }
 
 let isQueueingLock = false;
+let lastQueueTime = 0;
+let lastQueueQuery = '';
 
 async function queueTrackViaMenu(queryOrId, position = 'next') {
+  const now = Date.now();
+  if (queryOrId === lastQueueQuery && now - lastQueueTime < 3000) {
+    console.log('[BeatBridge] Ignoring duplicate queue call within 3s for:', queryOrId);
+    return { success: true, queued: queryOrId, position, duplicateSuppressed: true };
+  }
+  lastQueueTime = now;
+  lastQueueQuery = queryOrId;
+
   if (isQueueingLock) {
     for (let w = 0; w < 30 && isQueueingLock; w++) {
       await new Promise(r => setTimeout(r, 200));
@@ -91,49 +113,48 @@ async function queueTrackViaMenu(queryOrId, position = 'next') {
   }
 }
 
-function scoreTrackMatch(item, query, targetVideoId = null) {
-  const queryLower = query.toLowerCase();
-  const searchTerms = queryLower.split(/\s+/).filter(w => w.length > 1);
+function scoreTrackMatch(item, query) {
+  const normalize = (str) => (str || '').toLowerCase().replace(/[’‘]/g, "'").replace(/[^\w\s']/g, ' ').trim();
+  const queryNorm = normalize(query);
+  const searchTerms = queryNorm.split(/\s+/).filter(w => w.length > 1);
 
-  const titleEl = item.querySelector('.title') || 
-                  item.querySelector('.song-title') || 
-                  item.querySelector('yt-formatted-string.ytmusic-responsive-list-item-renderer') ||
-                  item.querySelector('a');
-  const title = titleEl ? titleEl.textContent.trim().toLowerCase() : '';
-  const fullText = item.textContent.trim().toLowerCase();
+  const titleEl = (item && typeof item.querySelector === 'function') ? (
+                    item.querySelector('.title') || 
+                    item.querySelector('.song-title') || 
+                    item.querySelector('yt-formatted-string.ytmusic-responsive-list-item-renderer') ||
+                    item.querySelector('a')
+                  ) : null;
+  const title = titleEl ? normalize(titleEl.textContent) : (item?.title ? normalize(item.title) : '');
+  const fullText = normalize((item && item.textContent) ? item.textContent : `${item?.title || ''} ${item?.artist || ''}`);
 
   // Strict Disqualification: NEVER pick karaoke, tribute, instrumental, cover, backing track unless requested
   const disqualifiers = ['karaoke', 'tribute', 'instrumental', 'backing track', 'minus one', 'cover'];
   for (const dq of disqualifiers) {
-    if (!queryLower.includes(dq) && (title.includes(dq) || fullText.includes(dq))) {
+    if (!queryNorm.includes(dq) && (title.includes(dq) || fullText.includes(dq))) {
       return -100000;
     }
   }
 
-  // Check videoId match
-  const itemVid = item.data?.videoId || 
-                  item.data?.playlistItemData?.videoId ||
-                  (item.querySelector('a[href*="v="]') ? new URL(item.querySelector('a[href*="v="]').href, window.location.href).searchParams.get('v') : null);
-  if (targetVideoId && itemVid === targetVideoId) {
-    return 10000; // Perfect match by canonical video ID
+  // Must contain core search terms (at least 60% of search terms or all if <= 2 terms)
+  const matchedTerms = searchTerms.filter(term => fullText.includes(term));
+  if (searchTerms.length <= 2 && matchedTerms.length < searchTerms.length) {
+    return -10000;
   }
-
-  // Must contain all core search terms
-  if (!searchTerms.every(term => fullText.includes(term))) {
+  if (matchedTerms.length < Math.ceil(searchTerms.length * 0.6)) {
     return -10000;
   }
 
   let score = 100;
 
   // 1. Prioritize official songs over video / fan uploads
-  if (fullText.includes('song •') || fullText.includes('song\n') || item.querySelector('ytmusic-item-thumbnail-overlay-renderer')) {
+  if (fullText.includes('song') || (item && typeof item.querySelector === 'function' && item.querySelector('ytmusic-item-thumbnail-overlay-renderer'))) {
     score += 60;
   }
 
   // 2. Penalize acoustic, live, remix unless requested
   const unwantedModifiers = ['acoustic', 'live', 'remix', 'slowed', 'reverb', '8d'];
   for (const mod of unwantedModifiers) {
-    if (!queryLower.includes(mod)) {
+    if (!queryNorm.includes(mod)) {
       if (title.includes(mod)) score -= 80;
       else if (fullText.includes(mod)) score -= 40;
     }
@@ -141,133 +162,168 @@ function scoreTrackMatch(item, query, targetVideoId = null) {
 
   // 3. Exact clean title match bonus
   const cleanTitle = title.replace(/\(.*?\)/g, '').replace(/\[.*?\]/g, '').trim();
-  for (const term of searchTerms) {
-    if (cleanTitle === term) {
-      score += 40;
-    }
+  if (cleanTitle === queryNorm || queryNorm.includes(cleanTitle)) {
+    score += 40;
   }
-  if (cleanTitle === queryLower || queryLower.includes(cleanTitle)) {
-    score += 30;
+  for (const term of searchTerms) {
+    if (cleanTitle === term) score += 20;
   }
 
   return score;
 }
 
 async function doQueueTrack(queryOrId, position = 'next') {
-  let targetVideoId = null;
-  let targetTitle = '';
-  let targetArtist = '';
-
-  // 1. If queryOrId is not a raw 11-char videoId, pre-resolve canonical studio track via InnerTube search
-  const isRawVideoId = /^[a-zA-Z0-9_-]{11}$/.test(queryOrId);
-  if (isRawVideoId) {
-    targetVideoId = queryOrId;
-  } else {
-    try {
-      const searchResults = await searchMusic(queryOrId, 5);
-      if (searchResults && searchResults.length > 0) {
-        targetVideoId = searchResults[0].videoId;
-        targetTitle = searchResults[0].title;
-        targetArtist = searchResults[0].artist;
-      }
-    } catch (e) {
-      console.warn('[BeatBridge] Pre-resolve search failed, falling back to DOM search:', e);
-    }
-  }
-
-  function findItemInList(items) {
-    // Priority 1: Match by exact videoId
-    if (targetVideoId) {
-      for (const item of items) {
-        const vid = item.data?.videoId || 
-                    item.data?.playlistItemData?.videoId ||
-                    (item.querySelector('a[href*="v="]') ? new URL(item.querySelector('a[href*="v="]').href, window.location.href).searchParams.get('v') : null);
-        if (vid === targetVideoId) return item;
-      }
-    }
-
-    // Priority 2: Scored match with strict disqualification and high confidence threshold (>= 140)
-    const scored = items
-      .map(item => ({ item, score: scoreTrackMatch(item, queryOrId, targetVideoId) }))
-      .filter(c => c.score >= 140)
-      .sort((a, b) => b.score - a.score);
-
-    return scored[0]?.item || null;
-  }
-
-  // 2. Check if track is already present in current page results (only if high confidence)
-  const existingItems = Array.from(document.querySelectorAll('ytmusic-responsive-list-item-renderer'));
-  let targetItem = findItemInList(existingItems);
-
-  // 3. If not found, perform search in YouTube Music without interrupting playback
-  if (!targetItem) {
-    const searchBox = document.querySelector('ytmusic-search-box');
-    const searchInput = document.querySelector('input.ytmusic-search-box') || 
-                        document.querySelector('#input.ytmusic-search-box') ||
-                        document.querySelector('input#input');
-
-    if (searchInput) {
-      if (searchBox) {
-        const searchBtn = searchBox.querySelector('button') || searchBox.querySelector('yt-icon-button');
-        if (searchBtn) searchBtn.click();
-      }
-      searchInput.click();
-      searchInput.focus();
-
-      // Search using canonical title + clean artist if available, else queryOrId
-      const cleanArtist = targetArtist ? targetArtist.replace(/^Song\s*•\s*/i, '').replace(/•.*/, '').trim() : '';
-      const searchStr = (targetTitle && cleanArtist)
-        ? `${targetTitle} ${cleanArtist}`
-        : queryOrId;
-
-      searchInput.value = searchStr;
-      searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-      searchInput.dispatchEvent(new Event('change', { bubbles: true }));
-      searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-
-      // Wait for search results and pick verified studio match
-      for (let i = 0; i < 30; i++) {
-        await new Promise(r => setTimeout(r, 200));
-        const items = Array.from(document.querySelectorAll('ytmusic-responsive-list-item-renderer'));
-        const matched = findItemInList(items);
-        if (matched) {
-          targetItem = matched;
-          break;
-        }
+  // 0. If position === 'next', check if track is ALREADY queued as Up Next
+  if (position === 'next') {
+    const curQueue = inspectQueue();
+    const nextItem = curQueue.items[curQueue.currentIndex + 1];
+    if (nextItem && nextItem.title) {
+      const simScore = scoreTrackMatch({ textContent: `${nextItem.title} ${nextItem.artist}` }, queryOrId);
+      if (simScore >= 80) {
+        console.log('[BeatBridge] Track already queued as Up Next:', nextItem.title);
+        return { success: true, queued: nextItem.title, position, alreadyQueued: true };
       }
     }
   }
 
-  if (targetItem) {
-    // 4. Click 3-dot menu button on the matched item
-    const menuBtn = targetItem.querySelector('ytmusic-menu-renderer yt-icon-button') ||
+  // 1. Actually click and open the search bar in the header
+  const searchBox = document.querySelector('ytmusic-search-box');
+  if (searchBox) {
+    const openBtn = searchBox.querySelector('button') || 
+                    searchBox.querySelector('yt-icon-button') ||
+                    searchBox.querySelector('#placeholder') ||
+                    searchBox.querySelector('#icon');
+    if (openBtn) openBtn.click();
+    await new Promise(r => setTimeout(r, 200));
+  }
+
+  const searchInput = document.querySelector('input.ytmusic-search-box') || 
+                      document.querySelector('#input.ytmusic-search-box') ||
+                      document.querySelector('ytmusic-search-box input') ||
+                      document.querySelector('input#input');
+
+  if (!searchInput) {
+    return { success: false, error: 'Could not find YouTube Music search bar in page' };
+  }
+
+  // 2. Click, focus, enter query directly without mangling, and press Enter
+  searchInput.click();
+  searchInput.focus();
+  searchInput.value = queryOrId;
+  searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+  searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+  const enterOpts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true };
+  searchInput.dispatchEvent(new KeyboardEvent('keydown', enterOpts));
+  searchInput.dispatchEvent(new KeyboardEvent('keypress', enterOpts));
+  searchInput.dispatchEvent(new KeyboardEvent('keyup', enterOpts));
+
+  // 3. Wait for search results to render
+  let candidates = [];
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 200));
+    const card = document.querySelector('ytmusic-card-shelf-renderer');
+    // Only select items from the search results page, excluding search suggestions
+    const listItems = Array.from(document.querySelectorAll(
+      'ytmusic-search-page ytmusic-responsive-list-item-renderer, #contents.ytmusic-section-list-renderer ytmusic-responsive-list-item-renderer, ytmusic-section-list-renderer ytmusic-responsive-list-item-renderer'
+    )).filter(item => !item.closest('ytmusic-search-box') && !item.closest('ytmusic-search-suggestions-section'));
+
+    const all = [];
+    if (card) all.push(card);
+    all.push(...listItems);
+
+    const validMatches = all.filter(item => scoreTrackMatch(item, queryOrId) >= 80);
+    if (validMatches.length > 0) {
+      candidates = all;
+      break;
+    }
+  }
+
+  // 4. Grade results from top to bottom in DOM order and rank them
+  const scoredCandidates = [];
+  for (let i = 0; i < candidates.length; i++) {
+    const item = candidates[i];
+    const score = scoreTrackMatch(item, queryOrId);
+    if (score < 80) continue; // Disqualified or poor candidate
+
+    // Top-to-bottom ranking preference: earlier results in DOM get a position bonus
+    const topBonus = Math.max(0, 30 - i * 3);
+    const totalScore = score + topBonus;
+    scoredCandidates.push({ item, totalScore });
+  }
+
+  scoredCandidates.sort((a, b) => b.totalScore - a.totalScore);
+
+  // 5. Try each ranked candidate from top to bottom until one successfully plays next
+  for (const { item: targetItem } of scoredCandidates) {
+    const menuBtn = targetItem.querySelector('button[aria-label="Action menu"]') ||
                     targetItem.querySelector('ytmusic-menu-renderer button') ||
-                    targetItem.querySelector('#menu button');
-    if (menuBtn) {
-      menuBtn.click();
-      await new Promise(r => setTimeout(r, 400));
+                    targetItem.querySelector('ytmusic-menu-renderer yt-icon-button') ||
+                    targetItem.querySelector('#menu button') ||
+                    targetItem.querySelector('yt-icon-button');
 
-      // 5. Click "Play next" or "Add to queue" in popup menu
+    if (menuBtn) {
+      menuBtn.scrollIntoView({ block: 'center', inline: 'nearest' });
+      menuBtn.click();
+
+      // 6. Click "Play next" or "Add to queue" in popup menu
       const targetText = position === 'next' ? 'Play next' : 'Add to queue';
-      const menuItems = Array.from(document.querySelectorAll('ytmusic-menu-service-item-renderer'));
-      const actionItem = menuItems.find(el => el.textContent && el.textContent.includes(targetText));
+      let actionItem = null;
+      for (let attempt = 0; attempt < 12; attempt++) {
+        await new Promise(r => setTimeout(r, 100));
+        const menuItems = Array.from(document.querySelectorAll('ytmusic-menu-service-item-renderer'));
+        actionItem = menuItems.find(el => 
+          el.textContent && 
+          el.textContent.includes(targetText) && 
+          (el.offsetParent !== null || el.getBoundingClientRect().width > 0)
+        );
+        if (actionItem) break;
+      }
 
       if (actionItem) {
+        const opts = { bubbles: true, cancelable: true, view: window };
+        actionItem.dispatchEvent(new PointerEvent('pointerdown', opts));
+        actionItem.dispatchEvent(new MouseEvent('mousedown', opts));
+        actionItem.dispatchEvent(new PointerEvent('pointerup', opts));
+        actionItem.dispatchEvent(new MouseEvent('mouseup', opts));
         actionItem.click();
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 500));
 
-        // 6. Open UP NEXT tab so user immediately sees it
+        // 7. Open UP NEXT tab so user immediately sees it
         const upNextTab = Array.from(document.querySelectorAll('ytmusic-tab-renderer')).find(t =>
           t.textContent && (t.textContent.includes('Up next') || t.textContent.includes('UP NEXT'))
         );
         if (upNextTab) upNextTab.click();
+        await new Promise(r => setTimeout(r, 200));
+
+        // Deduplication safeguard: If YouTube Music queued an identical consecutive duplicate, remove it
+        try {
+          const queueData = inspectQueue();
+          const cur = queueData.currentIndex;
+          const next1 = queueData.items[cur + 1];
+          const next2 = queueData.items[cur + 2];
+          if (next1 && next2 && next1.title && next1.title === next2.title) {
+            await removeTrack(cur + 2);
+          }
+        } catch (dedupErr) {
+          // Ignore deduplication errors
+        }
+
+        const titleEl = targetItem.querySelector('.title') || 
+                        targetItem.querySelector('.song-title') || 
+                        targetItem.querySelector('yt-formatted-string.ytmusic-responsive-list-item-renderer') ||
+                        targetItem.querySelector('a');
+        const queuedTitle = titleEl ? titleEl.textContent.trim() : queryOrId;
 
         return { 
           success: true, 
-          queued: targetTitle ? `${targetTitle} - ${targetArtist}` : queryOrId,
-          videoId: targetVideoId,
+          queued: queuedTitle,
           position 
         };
+      } else {
+        // Close menu if action item not found before checking next
+        document.body.click();
+        await new Promise(r => setTimeout(r, 200));
       }
     }
   }
@@ -544,6 +600,9 @@ if (window.__BEATBRIDGE_YTMUSIC_LISTENER__) {
 }
 
 window.__BEATBRIDGE_YTMUSIC_LISTENER__ = (req, sender, sendResponse) => {
+  try {
+    chrome.runtime.sendMessage({ type: 'content_log', data: `Action received in content script: ${req.action}` });
+  } catch (e) {}
   (async () => {
     const { action, params } = req;
     switch (action) {
@@ -576,3 +635,4 @@ window.__BEATBRIDGE_YTMUSIC_LISTENER__ = (req, sender, sendResponse) => {
 };
 
 chrome.runtime.onMessage.addListener(window.__BEATBRIDGE_YTMUSIC_LISTENER__);
+
