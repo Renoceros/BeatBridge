@@ -20,7 +20,7 @@ export interface PlaybackProvider {
 
 export function createBeatBridgeMcpServer(provider: PlaybackProvider): McpServer {
   const server = new McpServer({
-    name: 'ytmusic-dj',
+    name: 'BeatBridge',
     version: '0.2.0'
   });
 
@@ -80,9 +80,9 @@ export function createBeatBridgeMcpServer(provider: PlaybackProvider): McpServer
 
   server.tool(
     'queue_insert_relative',
-    'Insert one or more tracks relative to active song index (e.g., offset=1 means Up Next).',
+    'Insert one or more tracks relative to active song index (e.g., offset=1 means Up Next). Accepts song titles, artist queries, or video IDs directly.',
     {
-      videoIds: z.array(z.string()).describe('List of video/track IDs to insert in sequence'),
+      videoIds: z.array(z.string()).describe('List of song titles, artist queries, or video IDs to insert in sequence'),
       offset: z.number().int().min(1).default(1).describe('1 = play immediately after current song, 2 = after 1 song, etc.')
     },
     async ({ videoIds, offset }) => {
@@ -251,8 +251,21 @@ export function startMcpHttpServer(
     }
 
 
-    // 1. Classic MCP SSE Transport (/sse and /message)
+    // 1. Classic MCP SSE Transport (/sse and /message) vs Streamable HTTP SSE stream
     if (req.method === 'GET' && parsedUrl.pathname === '/sse') {
+      const sidHeader = req.headers['mcp-session-id'] as string | undefined;
+      // If Mcp-Session-Id is present, this is a Streamable HTTP SSE stream resumption, not classic SSE
+      if (sidHeader && httpSessions.has(sidHeader)) {
+        const transport = httpSessions.get(sidHeader)!;
+        try {
+          await transport.handleRequest(req, res);
+        } catch (err: any) {
+          console.error('[BeatBridge MCP] Streamable GET handleRequest error:', err);
+          if (!res.headersSent) res.writeHead(500).end();
+        }
+        return;
+      }
+
       try {
         const transport = new SSEServerTransport('/message', res);
         sseSessions.set(transport.sessionId, transport);

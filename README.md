@@ -96,8 +96,9 @@ The daemon starts:
 ```json
 {
   "mcpServers": {
-    "ytmusic-dj": {
-      "serverUrl": "http://127.0.0.1:4382/sse"
+    "BeatBridge": {
+      "command": "node",
+      "args": ["/Users/moreno_m5/Projects/BeatBridge/dist/bin/bridge.js", "--port", "4382"]
     }
   }
 }
@@ -108,7 +109,7 @@ The daemon starts:
 ```json
 {
   "mcpServers": {
-    "ytmusic-dj": {
+    "BeatBridge": {
       "command": "node",
       "args": ["/Users/moreno_m5/Projects/BeatBridge/dist/bin/bridge.js", "--port", "4382"]
     }

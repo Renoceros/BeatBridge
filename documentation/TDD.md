@@ -249,8 +249,9 @@ Google Antigravity (~/.gemini/config/mcp_config.json):
 JSON
 {
   "mcpServers": {
-    "ytmusic-dj": {
-      "serverUrl": "http://127.0.0.1:4382/sse"
+    "BeatBridge": {
+      "command": "node",
+      "args": ["/Users/moreno_m5/Projects/BeatBridge/dist/bin/bridge.js", "--port", "4382"]
     }
   }
 }
@@ -258,9 +259,9 @@ Claude Desktop (claude_desktop_config.json):
 JSON
 {
   "mcpServers": {
-    "ytmusic-dj": {
-      "command": "npx",
-      "args": ["-y", "ytmusic-mcp-bridge", "--port", "4382"]
+    "BeatBridge": {
+      "command": "node",
+      "args": ["/Users/moreno_m5/Projects/BeatBridge/dist/bin/bridge.js", "--port", "4382"]
     }
   }
 }

@@ -105,8 +105,8 @@ async function runSelfCheck() {
       if (received.includes('"result"')) {
         const parsed = JSON.parse(received.trim().split('\n')[0]);
         assert.strictEqual(parsed.id, 1);
-        assert.strictEqual(parsed.result.serverInfo.name, 'ytmusic-dj');
-        console.log('✓ Stdio Bridge successfully communicated with MCP Host over SSE');
+        assert.strictEqual(parsed.result.serverInfo.name, 'BeatBridge');
+        console.log('✓ Stdio Bridge successfully communicated with MCP Host');
         bridgeProc.kill('SIGTERM');
         resolve();
       }
