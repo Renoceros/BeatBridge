@@ -43,8 +43,18 @@ function getPlayerState() {
   };
 }
 
+function getVisibleQueueElements() {
+  return Array.from(document.querySelectorAll('ytmusic-player-queue-item')).filter(el => {
+    // Exclude hidden counterpart renderers (used internally by YouTube Music for Song/Video toggling)
+    if (el.parentElement?.id === 'counterpart-renderer' || el.closest('#counterpart-renderer')) {
+      return false;
+    }
+    return true;
+  });
+}
+
 function inspectQueue() {
-  const queueItems = Array.from(document.querySelectorAll('ytmusic-player-queue-item'));
+  const queueItems = getVisibleQueueElements();
   let currentIndex = -1;
 
   const raw = queueItems.map((el, idx) => {
@@ -280,28 +290,36 @@ async function doQueueTrack(queryOrId, position = 'next') {
 
     if (menuBtn) {
       menuBtn.scrollIntoView({ block: 'center', inline: 'nearest' });
+      const opts = { bubbles: true, cancelable: true, view: window };
+      menuBtn.dispatchEvent(new PointerEvent('pointerdown', opts));
+      menuBtn.dispatchEvent(new MouseEvent('mousedown', opts));
+      menuBtn.dispatchEvent(new PointerEvent('pointerup', opts));
+      menuBtn.dispatchEvent(new MouseEvent('mouseup', opts));
       menuBtn.click();
 
       // 6. Click "Play next" or "Add to queue" in popup menu
       const targetText = position === 'next' ? 'Play next' : 'Add to queue';
       let actionItem = null;
-      for (let attempt = 0; attempt < 12; attempt++) {
+      for (let attempt = 0; attempt < 15; attempt++) {
         await new Promise(r => setTimeout(r, 100));
         const menuItems = Array.from(document.querySelectorAll('ytmusic-menu-service-item-renderer'));
-        actionItem = menuItems.find(el => 
-          el.textContent && 
-          el.textContent.includes(targetText) && 
-          (el.offsetParent !== null || el.getBoundingClientRect().width > 0)
-        );
+        actionItem = menuItems.find(el => {
+          if (!el.textContent || !el.textContent.includes(targetText)) return false;
+          const rect = el.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        });
         if (actionItem) break;
       }
 
       if (actionItem) {
-        const opts = { bubbles: true, cancelable: true, view: window };
-        actionItem.dispatchEvent(new PointerEvent('pointerdown', opts));
-        actionItem.dispatchEvent(new MouseEvent('mousedown', opts));
-        actionItem.dispatchEvent(new PointerEvent('pointerup', opts));
-        actionItem.dispatchEvent(new MouseEvent('mouseup', opts));
+        const clickTarget = actionItem.querySelector('.ytSpecTouchFeedbackShapeFill') || 
+                            actionItem.querySelector('yt-formatted-string') || 
+                            actionItem;
+        clickTarget.dispatchEvent(new PointerEvent('pointerdown', opts));
+        clickTarget.dispatchEvent(new MouseEvent('mousedown', opts));
+        clickTarget.dispatchEvent(new PointerEvent('pointerup', opts));
+        clickTarget.dispatchEvent(new MouseEvent('mouseup', opts));
+        clickTarget.click();
         actionItem.click();
         await new Promise(r => setTimeout(r, 500));
 
@@ -374,7 +392,7 @@ async function appendQueue(videoIds = []) {
 }
 
 function jumpTo(index) {
-  const items = document.querySelectorAll('ytmusic-player-queue-item');
+  const items = getVisibleQueueElements();
   if (items[index]) {
     const btn = items[index].querySelector('.play-button') || items[index];
     btn.click();
@@ -388,7 +406,7 @@ function jumpTo(index) {
 }
 
 async function removeTrack(index) {
-  const items = Array.from(document.querySelectorAll('ytmusic-player-queue-item'));
+  const items = getVisibleQueueElements();
   if (items[index]) {
     const menuBtn = items[index].querySelector('ytmusic-menu-renderer yt-icon-button') ||
                     items[index].querySelector('ytmusic-menu-renderer button') ||
