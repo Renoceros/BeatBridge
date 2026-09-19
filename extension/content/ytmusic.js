@@ -346,8 +346,7 @@ async function doQueueTrack(queryOrId, position = 'next') {
         clickTarget.dispatchEvent(new PointerEvent('pointerup', opts));
         clickTarget.dispatchEvent(new MouseEvent('mouseup', opts));
         clickTarget.click();
-        actionItem.click();
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 600));
 
         // 7. Open UP NEXT tab so user immediately sees it
         const upNextTab = Array.from(document.querySelectorAll('ytmusic-tab-renderer')).find(t =>
