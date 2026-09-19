@@ -282,6 +282,32 @@ async function doQueueTrack(queryOrId, position = 'next') {
 
   // 5. Try each ranked candidate from top to bottom until one successfully plays next
   for (const { item: targetItem } of scoredCandidates) {
+    const titleEl = targetItem.querySelector('.title') || 
+                    targetItem.querySelector('.song-title') || 
+                    targetItem.querySelector('yt-formatted-string.ytmusic-responsive-list-item-renderer') ||
+                    targetItem.querySelector('a');
+    const targetTitle = titleEl ? titleEl.textContent.trim().toLowerCase() : '';
+
+    // Upfront deduplication guard: if already playing or already Up Next, skip redundant queuing
+    if (position === 'next' && targetTitle) {
+      const liveQueue = inspectQueue();
+      const cur = liveQueue.currentIndex;
+      const nextTrack = liveQueue.items[cur + 1];
+      const curTrack = liveQueue.items[cur];
+      if (
+        (nextTrack && nextTrack.title && nextTrack.title.toLowerCase() === targetTitle) ||
+        (curTrack && curTrack.title && curTrack.title.toLowerCase() === targetTitle)
+      ) {
+        console.log('[BeatBridge] Track is already playing or next in queue, skipping duplicate:', targetTitle);
+        return {
+          success: true,
+          queued: titleEl ? titleEl.textContent.trim() : queryOrId,
+          position,
+          alreadyQueued: true
+        };
+      }
+    }
+
     const menuBtn = targetItem.querySelector('button[aria-label="Action menu"]') ||
                     targetItem.querySelector('ytmusic-menu-renderer button') ||
                     targetItem.querySelector('ytmusic-menu-renderer yt-icon-button') ||
